@@ -48,6 +48,7 @@ export default function Dashboard() {
   const [paymentFilter, setPaymentFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState(null);
 
   async function load() {
     setLoading(true);
@@ -118,27 +119,37 @@ export default function Dashboard() {
     }
   }
 
-  async function deleteSelected() {
+  function deleteSelected() {
     if (selected.size === 0) return;
-    if (!confirm(`Excluir ${selected.size} registro(s)?`)) return;
-    await fetch("/api/transactions", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids: Array.from(selected) }),
+    setConfirmDialog({
+      message: `Excluir ${selected.size} registro(s)?`,
+      onConfirm: async () => {
+        await fetch("/api/transactions", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: Array.from(selected) }),
+        });
+        setSelected(new Set());
+        setConfirmDialog(null);
+        load();
+      },
     });
-    setSelected(new Set());
-    load();
   }
 
-  async function clearAll() {
-    if (!confirm("Isso vai apagar TODOS os registros. Tem certeza?")) return;
-    await fetch("/api/transactions", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ all: true }),
+  function clearAll() {
+    setConfirmDialog({
+      message: "Isso vai apagar TODOS os registros. Tem certeza?",
+      onConfirm: async () => {
+        await fetch("/api/transactions", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ all: true }),
+        });
+        setSelected(new Set());
+        setConfirmDialog(null);
+        load();
+      },
     });
-    setSelected(new Set());
-    load();
   }
 
   async function updateTransaction(id, data) {
@@ -150,10 +161,15 @@ export default function Dashboard() {
     load();
   }
 
-  async function deleteOne(id) {
-    if (!confirm("Excluir este registro?")) return;
-    await fetch(`/api/transactions/${id}`, { method: "DELETE" });
-    load();
+  function deleteOne(id) {
+    setConfirmDialog({
+      message: "Excluir este registro?",
+      onConfirm: async () => {
+        await fetch(`/api/transactions/${id}`, { method: "DELETE" });
+        setConfirmDialog(null);
+        load();
+      },
+    });
   }
 
   return (
@@ -371,6 +387,44 @@ export default function Dashboard() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      {confirmDialog && (
+        <ConfirmDialog
+          message={confirmDialog.message}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={() => setConfirmDialog(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ConfirmDialog({ message, onConfirm, onCancel }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-sm rounded-xl border border-white/10 bg-[#12161c] p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <p className="text-sm text-white/90 mb-4">{message}</p>
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="rounded-lg bg-white/5 hover:bg-white/10 px-3 py-1.5 text-sm transition-colors"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={onConfirm}
+            className="rounded-lg bg-rose-600 hover:bg-rose-500 px-3 py-1.5 text-sm font-medium transition-colors"
+          >
+            Excluir
+          </button>
+        </div>
       </div>
     </div>
   );
