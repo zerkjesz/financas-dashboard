@@ -10,3 +10,68 @@ body {
   color: var(--foreground);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
+
+.aurora-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.aurora-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.35;
+  mix-blend-mode: screen;
+  will-change: transform;
+}
+
+.aurora-blob--emerald {
+  width: 480px;
+  height: 480px;
+  top: -140px;
+  left: -120px;
+  background: radial-gradient(circle at 30% 30%, #10b981, transparent 70%);
+  animation: aurora-drift-1 28s ease-in-out infinite alternate;
+}
+
+.aurora-blob--sky {
+  width: 420px;
+  height: 420px;
+  top: 15%;
+  right: -160px;
+  background: radial-gradient(circle at 60% 40%, #38bdf8, transparent 70%);
+  animation: aurora-drift-2 34s ease-in-out infinite alternate;
+}
+
+.aurora-blob--violet {
+  width: 520px;
+  height: 520px;
+  bottom: -180px;
+  left: 15%;
+  background: radial-gradient(circle at 50% 50%, #a78bfa, transparent 70%);
+  animation: aurora-drift-3 40s ease-in-out infinite alternate;
+}
+
+@keyframes aurora-drift-1 {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(70px, 90px) scale(1.15); }
+}
+
+@keyframes aurora-drift-2 {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(-80px, 60px) scale(1.1); }
+}
+
+@keyframes aurora-drift-3 {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(50px, -70px) scale(1.08); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora-blob {
+    animation: none;
+  }
+}
