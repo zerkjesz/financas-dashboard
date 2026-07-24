@@ -5,6 +5,15 @@ Dashboard de gastos e receitas pessoais. Substitui a planilha do Google Sheets
 em Next.js mostra tudo com filtros, forma de pagamento, gastos fixos, gráfico
 por categoria, maiores gastos, exportação CSV e edição/exclusão de registros.
 
+**Já está no ar:** https://financas-dashboard-omega.vercel.app
+Banco: Neon Postgres (projeto `financas-dashboard`, região São Paulo).
+Bot: webhook em produção (não depende de nenhum processo/computador ligado).
+Repo: https://github.com/zerkjesz/financas-dashboard (privado)
+
+Pra atualizar o site depois de mexer no código: só dar `git push` na branch
+`main` — a Vercel já está conectada ao repositório e faz o deploy sozinha a
+cada push.
+
 ## Como funciona
 
 1. Você manda uma mensagem de texto livre pro bot no Telegram, tipo
@@ -68,28 +77,26 @@ Gasto fixo/recorrente: `fixo`, `fixa`, `recorrente`, `assinatura`, `mensal`,
 `mensalidade` — marca o registro com 🔁 (editável manualmente no dashboard
 também).
 
-## Hospedar (sempre ativo, em qualquer dispositivo)
+## Hospedagem (já configurada)
 
-Pra não depender do Mac ligado e acessar de PC/celular/qualquer lugar:
+- **Banco**: Neon Postgres, projeto `financas-dashboard`, região São Paulo.
+  Connection string está nas env vars da Vercel (`DATABASE_URL`).
+- **Deploy**: Vercel, projeto `zerkjeszs-projects/financas-dashboard`,
+  conectado ao repositório GitHub — todo `git push` na `main` dispara deploy
+  automático.
+- **Bot**: webhook (`app/api/telegram/webhook/route.js`) configurado direto
+  na API do Telegram, apontando pro domínio da Vercel. Não depende de
+  `npm run bot` nem de nenhum computador ligado.
 
-1. **Banco na nuvem**: crie um banco Postgres grátis (Neon ou Supabase — o
-   zerk-ecommerce já usa Neon, dá pra reaproveitar a conta). Troque no
-   `prisma/schema.prisma` o `provider` de `sqlite` pra `postgresql` e coloque
-   a connection string no `DATABASE_URL`. Rode `npx prisma migrate deploy`.
-2. **Deploy do dashboard**: suba o projeto num repositório Git e importe na
-   [Vercel](https://vercel.com) (login com GitHub, plano grátis). Configure a
-   env var `DATABASE_URL` e `TELEGRAM_TOKEN` lá nas configurações do projeto.
-3. **Bot vira webhook** (não precisa mais de `npm run bot` rodando): depois
-   do deploy, chame uma vez (trocando pelos seus valores):
-   ```bash
-   curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://SEU_DOMINIO.vercel.app/api/telegram/webhook"
-   ```
-   A partir daí o Telegram chama `app/api/telegram/webhook/route.js`
-   diretamente a cada mensagem — sem processo nenhum rodando 24h.
+Se precisar reconfigurar o webhook (ex: mudou o domínio):
+```bash
+curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://SEU_DOMINIO.vercel.app/api/telegram/webhook"
+```
 
-Depois disso o dashboard fica acessível em qualquer navegador (PC, Mac,
-celular) pela URL da Vercel, e o bot funciona sempre, mesmo com o Mac
-desligado.
+Pra conferir o status do webhook:
+```bash
+curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
+```
 
 ## Estrutura
 
