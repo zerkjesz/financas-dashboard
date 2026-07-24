@@ -25,6 +25,20 @@ function paymentBreakdownFor(transactions, type) {
     const key = t.paymentMethod || "outros";
     totals.set(key, (totals.get(key) || 0) + t.amount);
   }
+  return toBreakdownList(totals);
+}
+
+function balanceBreakdown(transactions) {
+  const totals = new Map();
+  for (const t of transactions) {
+    const key = t.paymentMethod || "outros";
+    const signed = t.type === "income" ? t.amount : -t.amount;
+    totals.set(key, (totals.get(key) || 0) + signed);
+  }
+  return toBreakdownList(totals);
+}
+
+function toBreakdownList(totals) {
   return Array.from(totals.entries())
     .sort((a, b) => b[1] - a[1])
     .map(([key, value]) => ({
@@ -112,6 +126,7 @@ export default function Dashboard() {
 
   const incomeByPayment = useMemo(() => paymentBreakdownFor(filtered, "income"), [filtered]);
   const expenseByPayment = useMemo(() => paymentBreakdownFor(filtered, "expense"), [filtered]);
+  const balanceByPayment = useMemo(() => balanceBreakdown(filtered), [filtered]);
 
   const categoryBreakdown = useMemo(() => {
     const totals = new Map();
@@ -239,7 +254,12 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <SummaryCard label="Receitas" value={summary.income} tone="emerald" breakdown={incomeByPayment} />
         <SummaryCard label="Gastos" value={summary.expense} tone="rose" breakdown={expenseByPayment} />
-        <SummaryCard label="Saldo" value={summary.balance} tone={summary.balance >= 0 ? "emerald" : "rose"} />
+        <SummaryCard
+          label="Saldo"
+          value={summary.balance}
+          tone={summary.balance >= 0 ? "emerald" : "rose"}
+          breakdown={balanceByPayment}
+        />
       </div>
 
       {categoryBreakdown.entries.length > 0 && (
@@ -501,7 +521,9 @@ function SummaryCard({ label, value, tone, breakdown }) {
             <div key={b.key} className="flex items-center gap-2 text-xs">
               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${b.dotColor}`} />
               <span className="text-white/50 truncate">{b.label}</span>
-              <span className="ml-auto text-white/70 shrink-0">{formatMoney(b.value)}</span>
+              <span className={`ml-auto shrink-0 ${b.value < 0 ? "text-rose-400" : "text-white/70"}`}>
+                {formatMoney(b.value)}
+              </span>
             </div>
           ))}
         </div>
