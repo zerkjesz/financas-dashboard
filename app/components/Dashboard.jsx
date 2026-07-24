@@ -19,7 +19,7 @@ function monthKey(dateStr) {
 }
 
 function downloadCsv(transactions) {
-  const header = ["Data", "Tipo", "Valor", "Categoria", "Forma de pagamento", "Fixo", "Descrição"];
+  const header = ["Data", "Tipo", "Valor", "Categoria", "Forma de pagamento", "Fixo", "Parcela", "Descrição"];
   const rows = transactions.map((t) => [
     new Date(t.occurredAt).toLocaleDateString("pt-BR"),
     t.type === "income" ? "Receita" : "Gasto",
@@ -27,6 +27,7 @@ function downloadCsv(transactions) {
     t.category,
     t.paymentMethod ? PAYMENT_LABELS[t.paymentMethod] : "",
     t.isRecurring ? "Sim" : "",
+    t.installmentTotal ? `${t.installmentCurrent ?? "?"}/${t.installmentTotal}` : "",
     `"${(t.description || "").replace(/"/g, '""')}"`,
   ]);
   const csv = [header, ...rows].map((r) => r.join(";")).join("\n");
@@ -319,16 +320,17 @@ export default function Dashboard() {
               <th className="px-3 py-2">Descrição</th>
               <th className="px-3 py-2">Categoria</th>
               <th className="px-3 py-2">Pagamento</th>
+              <th className="px-3 py-2">Parcela</th>
               <th className="px-3 py-2 text-right">Valor</th>
               <th className="px-3 py-2 w-10"></th>
             </tr>
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={7} className="px-3 py-6 text-center text-white/40">Carregando...</td></tr>
+              <tr><td colSpan={8} className="px-3 py-6 text-center text-white/40">Carregando...</td></tr>
             )}
             {!loading && filtered.length === 0 && (
-              <tr><td colSpan={7} className="px-3 py-6 text-center text-white/40">Nenhum registro ainda.</td></tr>
+              <tr><td colSpan={8} className="px-3 py-6 text-center text-white/40">Nenhum registro ainda.</td></tr>
             )}
             {filtered.map((t) => (
               <tr key={t.id} className="border-t border-white/5 hover:bg-white/[0.03]">
@@ -370,6 +372,35 @@ export default function Dashboard() {
                       <option key={p.value} value={p.value}>{p.label}</option>
                     ))}
                   </select>
+                </td>
+                <td className="px-3 py-2">
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      min="1"
+                      placeholder="—"
+                      value={t.installmentCurrent ?? ""}
+                      onChange={(e) =>
+                        updateTransaction(t.id, {
+                          installmentCurrent: e.target.value ? parseInt(e.target.value, 10) : null,
+                        })
+                      }
+                      className="bg-white/5 border border-white/10 rounded px-1.5 py-1 text-xs w-12"
+                    />
+                    <span className="text-white/30">/</span>
+                    <input
+                      type="number"
+                      min="1"
+                      placeholder="—"
+                      value={t.installmentTotal ?? ""}
+                      onChange={(e) =>
+                        updateTransaction(t.id, {
+                          installmentTotal: e.target.value ? parseInt(e.target.value, 10) : null,
+                        })
+                      }
+                      className="bg-white/5 border border-white/10 rounded px-1.5 py-1 text-xs w-12"
+                    />
+                  </div>
                 </td>
                 <td className={`px-3 py-2 text-right font-medium whitespace-nowrap ${t.type === "income" ? "text-emerald-400" : "text-rose-400"}`}>
                   {t.type === "income" ? "+" : "-"}{formatMoney(t.amount)}
@@ -447,12 +478,23 @@ function AddForm({ onAdd, onCancel }) {
   const [paymentMethod, setPaymentMethod] = useState("");
   const [isRecurring, setIsRecurring] = useState(false);
   const [description, setDescription] = useState("");
+  const [installmentCurrent, setInstallmentCurrent] = useState("");
+  const [installmentTotal, setInstallmentTotal] = useState("");
 
   function submit(e) {
     e.preventDefault();
     const value = parseFloat(amount.replace(",", "."));
     if (!Number.isFinite(value) || value <= 0) return;
-    onAdd({ type, amount: value, category, paymentMethod: paymentMethod || null, isRecurring, description });
+    onAdd({
+      type,
+      amount: value,
+      category,
+      paymentMethod: paymentMethod || null,
+      isRecurring,
+      description,
+      installmentCurrent: installmentCurrent ? parseInt(installmentCurrent, 10) : null,
+      installmentTotal: installmentTotal ? parseInt(installmentTotal, 10) : null,
+    });
   }
 
   return (
@@ -488,6 +530,24 @@ function AddForm({ onAdd, onCancel }) {
       <div className="flex-1 min-w-[160px]">
         <label className="block text-xs text-white/50 mb-1">Descrição</label>
         <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="ex: mercado da semana" className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm w-full" />
+      </div>
+      <div>
+        <label className="block text-xs text-white/50 mb-1">Parcela</label>
+        <div className="flex items-center gap-1">
+          <input
+            value={installmentCurrent}
+            onChange={(e) => setInstallmentCurrent(e.target.value)}
+            placeholder="atual"
+            className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm w-16"
+          />
+          <span className="text-white/30">/</span>
+          <input
+            value={installmentTotal}
+            onChange={(e) => setInstallmentTotal(e.target.value)}
+            placeholder="total"
+            className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm w-16"
+          />
+        </div>
       </div>
       <label className="flex items-center gap-1.5 text-xs text-white/60 pb-2">
         <input type="checkbox" checked={isRecurring} onChange={(e) => setIsRecurring(e.target.checked)} />

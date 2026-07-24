@@ -14,6 +14,8 @@ model Transaction {
   category      String   @default("Outros")
   paymentMethod String? // "pix" | "credit_card" | "food_voucher"
   isRecurring   Boolean  @default(false)
+  installmentCurrent Int? // parcela atual (ex: 4 de "4/10")
+  installmentTotal   Int? // total de parcelas (ex: 10 de "4/10")
   description   String
   rawMessage    String
   source        String   @default("telegram") // "telegram" | "manual"

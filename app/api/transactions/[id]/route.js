@@ -12,6 +12,8 @@ export async function PATCH(request, { params }) {
   if (typeof body.description === "string") data.description = body.description;
   if (body.paymentMethod === null || typeof body.paymentMethod === "string") data.paymentMethod = body.paymentMethod;
   if (typeof body.isRecurring === "boolean") data.isRecurring = body.isRecurring;
+  if (body.installmentCurrent === null || Number.isInteger(body.installmentCurrent)) data.installmentCurrent = body.installmentCurrent;
+  if (body.installmentTotal === null || Number.isInteger(body.installmentTotal)) data.installmentTotal = body.installmentTotal;
 
   const transaction = await prisma.transaction.update({ where: { id }, data });
   return NextResponse.json(transaction);

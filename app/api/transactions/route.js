@@ -10,7 +10,7 @@ export async function GET() {
 
 export async function POST(request) {
   const body = await request.json();
-  const { type, amount, category, description, paymentMethod, isRecurring } = body;
+  const { type, amount, category, description, paymentMethod, isRecurring, installmentCurrent, installmentTotal } = body;
 
   if (!type || !["income", "expense"].includes(type)) {
     return NextResponse.json({ error: "type inválido" }, { status: 400 });
@@ -26,6 +26,8 @@ export async function POST(request) {
       category: category || "Outros",
       paymentMethod: paymentMethod || null,
       isRecurring: Boolean(isRecurring),
+      installmentCurrent: Number.isInteger(installmentCurrent) ? installmentCurrent : null,
+      installmentTotal: Number.isInteger(installmentTotal) ? installmentTotal : null,
       description: description || "",
       rawMessage: description || "",
       source: "manual",
