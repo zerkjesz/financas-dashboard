@@ -4,11 +4,36 @@ import { useEffect, useMemo, useState } from "react";
 import { CATEGORIES, PAYMENT_METHODS } from "@/lib/parseTransaction";
 
 const PAYMENT_LABELS = Object.fromEntries(PAYMENT_METHODS.map((p) => [p.value, p.label]));
+const PAYMENT_LABELS_WITH_FALLBACK = { ...PAYMENT_LABELS, outros: "Não informado" };
 
 const CHART_COLORS = [
   "bg-emerald-500", "bg-sky-500", "bg-amber-500", "bg-rose-500",
   "bg-violet-500", "bg-cyan-500", "bg-white/30",
 ];
+
+const PAYMENT_DOT_COLORS = {
+  pix: "bg-sky-400",
+  credit_card: "bg-violet-400",
+  food_voucher: "bg-amber-400",
+  outros: "bg-white/30",
+};
+
+function paymentBreakdownFor(transactions, type) {
+  const totals = new Map();
+  for (const t of transactions) {
+    if (t.type !== type) continue;
+    const key = t.paymentMethod || "outros";
+    totals.set(key, (totals.get(key) || 0) + t.amount);
+  }
+  return Array.from(totals.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([key, value]) => ({
+      key,
+      value,
+      label: PAYMENT_LABELS_WITH_FALLBACK[key] || key,
+      dotColor: PAYMENT_DOT_COLORS[key] || "bg-white/30",
+    }));
+}
 
 function formatMoney(value) {
   return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -84,6 +109,9 @@ export default function Dashboard() {
     const expense = filtered.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
     return { income, expense, balance: income - expense };
   }, [filtered]);
+
+  const incomeByPayment = useMemo(() => paymentBreakdownFor(filtered, "income"), [filtered]);
+  const expenseByPayment = useMemo(() => paymentBreakdownFor(filtered, "expense"), [filtered]);
 
   const categoryBreakdown = useMemo(() => {
     const totals = new Map();
@@ -209,8 +237,8 @@ export default function Dashboard() {
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-        <SummaryCard label="Receitas" value={summary.income} tone="emerald" />
-        <SummaryCard label="Gastos" value={summary.expense} tone="rose" />
+        <SummaryCard label="Receitas" value={summary.income} tone="emerald" breakdown={incomeByPayment} />
+        <SummaryCard label="Gastos" value={summary.expense} tone="rose" breakdown={expenseByPayment} />
         <SummaryCard label="Saldo" value={summary.balance} tone={summary.balance >= 0 ? "emerald" : "rose"} />
       </div>
 
@@ -461,12 +489,23 @@ function ConfirmDialog({ message, onConfirm, onCancel }) {
   );
 }
 
-function SummaryCard({ label, value, tone }) {
+function SummaryCard({ label, value, tone, breakdown }) {
   const toneClass = tone === "emerald" ? "text-emerald-400" : "text-rose-400";
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
       <div className="text-xs text-white/50 mb-1">{label}</div>
       <div className={`text-xl font-semibold ${toneClass}`}>{formatMoney(value)}</div>
+      {breakdown && breakdown.length > 0 && (
+        <div className="mt-3 pt-3 border-t border-white/10 space-y-1.5">
+          {breakdown.map((b) => (
+            <div key={b.key} className="flex items-center gap-2 text-xs">
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${b.dotColor}`} />
+              <span className="text-white/50 truncate">{b.label}</span>
+              <span className="ml-auto text-white/70 shrink-0">{formatMoney(b.value)}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
