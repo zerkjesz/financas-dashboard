@@ -16,7 +16,7 @@ export async function POST(request) {
   }
 
   const token = process.env.TELEGRAM_TOKEN;
-  const result = await processTelegramMessage(text);
+  const result = await processTelegramMessage(text, String(chatId));
 
   await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",

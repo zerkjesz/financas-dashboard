@@ -1,14 +1,18 @@
 import "./globals.css";
+import NavBar from "./components/NavBar.jsx";
 
 export const metadata = {
   title: "Finanças",
-  description: "Dashboard de gastos e receitas pessoais",
+  description: "Gestor financeiro pessoal",
 };
 
 export default function RootLayout({ children }) {
   return (
     <html lang="pt-BR">
-      <body>{children}</body>
+      <body>
+        <NavBar />
+        {children}
+      </body>
     </html>
   );
 }

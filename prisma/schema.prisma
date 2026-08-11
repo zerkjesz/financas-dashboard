@@ -7,17 +7,241 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Transaction {
-  id            String   @id @default(cuid())
-  type          String // "income" | "expense"
+model Account {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  type      String // "checking" | "cash" | "food_voucher"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  incomes            Income[]
+  expenses           Expense[]
+  transfersFrom      Transfer[]          @relation("TransferFromAccount")
+  transfersTo        Transfer[]          @relation("TransferToAccount")
+  balanceAdjustments BalanceAdjustment[]
+  recurringRules     RecurringRule[]
+  cards              Card[]
+}
+
+model Card {
+  id         String   @id @default(cuid())
+  slug       String   @unique
+  name       String
+  accountId  String?
+  account    Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  totalLimit Float
+  closingDay Int? // null = desconhecido, editável depois
+  dueDay     Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  expenses     Expense[]
+  purchases    Purchase[]
+  bills        CardBill[]
+  limitUpdates CardLimitUpdate[]
+  transfers    Transfer[]
+}
+
+model Income {
+  id                  String         @id @default(cuid())
+  amount              Float
+  description         String
+  category            String         @default("Outros")
+  accountId           String
+  account             Account        @relation(fields: [accountId], references: [id])
+  recurringRuleId     String?
+  recurringRule       RecurringRule? @relation(fields: [recurringRuleId], references: [id], onDelete: SetNull)
+  isRecurring         Boolean        @default(false)
+  source              String         @default("manual") // "telegram" | "manual" | "migration"
+  rawMessage          String?
+  legacyTransactionId String?        @unique
+  occurredAt          DateTime       @default(now())
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  @@index([occurredAt])
+  @@index([accountId])
+}
+
+model Expense {
+  id                  String         @id @default(cuid())
+  amount              Float
+  description         String
+  category            String         @default("Outros")
+  accountId           String?
+  account             Account?       @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  cardId              String?
+  card                Card?          @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  recurringRuleId     String?
+  recurringRule       RecurringRule? @relation(fields: [recurringRuleId], references: [id], onDelete: SetNull)
+  isRecurring         Boolean        @default(false)
+  source              String         @default("manual")
+  rawMessage          String?
+  legacyTransactionId String?        @unique
+  occurredAt          DateTime       @default(now())
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  // Invariante de app (não garantida pelo Prisma): exatamente um de accountId/cardId deve estar setado.
+  @@index([occurredAt])
+  @@index([accountId])
+  @@index([cardId])
+}
+
+model Transfer {
+  id            String    @id @default(cuid())
   amount        Float
-  category      String   @default("Outros")
-  paymentMethod String? // "pix" | "credit_card" | "food_voucher"
-  isRecurring   Boolean  @default(false)
   description   String
+  fromAccountId String?
+  fromAccount   Account?  @relation("TransferFromAccount", fields: [fromAccountId], references: [id], onDelete: SetNull)
+  toAccountId   String?
+  toAccount     Account?  @relation("TransferToAccount", fields: [toAccountId], references: [id], onDelete: SetNull)
+  toCardId      String?
+  toCard        Card?     @relation(fields: [toCardId], references: [id], onDelete: SetNull)
+  cardBillId    String?
+  cardBill      CardBill? @relation(fields: [cardBillId], references: [id], onDelete: SetNull)
+  kind          String    @default("generic") // "generic" | "card_bill_payment" | "installment_anticipation"
+  source        String    @default("manual")
+  rawMessage    String?
+  occurredAt    DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+
+  @@index([occurredAt])
+}
+
+model BalanceAdjustment {
+  id         String   @id @default(cuid())
+  accountId  String
+  account    Account  @relation(fields: [accountId], references: [id])
+  newBalance Float
+  note       String?
+  source     String   @default("manual") // "telegram" | "manual" | "migration"
+  rawMessage String?
+  occurredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  @@index([accountId, occurredAt])
+}
+
+model CardLimitUpdate {
+  id                String   @id @default(cuid())
+  cardId            String
+  card              Card     @relation(fields: [cardId], references: [id])
+  newTotalLimit     Float? // setado só se o limite total também mudou
+  newUsedLimit      Float // valor-âncora
+  reportedAvailable Float? // valor bruto que o usuário informou, mantido pra auditoria
+  note              String?
+  source            String   @default("manual")
+  rawMessage        String?
+  occurredAt        DateTime @default(now())
+  createdAt         DateTime @default(now())
+
+  @@index([cardId, occurredAt])
+}
+
+model Purchase {
+  id                        String   @id @default(cuid())
+  description               String
+  totalAmount               Float
+  installmentCount          Int
+  installmentValue          Float
+  category                  String   @default("Outros")
+  cardId                    String
+  card                      Card     @relation(fields: [cardId], references: [id])
+  firstInstallmentMonth     String // "2026-09" (YYYY-MM)
+  startingInstallmentNumber Int      @default(1)
+  source                    String   @default("manual")
+  rawMessage                String?
+  purchasedAt               DateTime @default(now())
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  installments Installment[]
+
+  @@index([cardId])
+}
+
+model Installment {
+  id         String   @id @default(cuid())
+  purchaseId String
+  purchase   Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  number     Int
+  amount     Float
+  billMonth  String // "2026-09"
+  createdAt  DateTime @default(now())
+
+  @@unique([purchaseId, number])
+  @@index([billMonth])
+}
+
+model CardBill {
+  id          String    @id @default(cuid())
+  cardId      String
+  card        Card      @relation(fields: [cardId], references: [id])
+  cycleMonth  String // "2026-08"
+  closesAt    DateTime
+  dueAt       DateTime
+  totalAmount Float     @default(0)
+  status      String    @default("open") // "open" | "closed" | "paid"
+  paidAt      DateTime?
+  paidAmount  Float?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  transfers Transfer[]
+
+  @@unique([cardId, cycleMonth])
+}
+
+model RecurringRule {
+  id         String   @id @default(cuid())
+  name       String // "Vale Alimentação - Recarga", "Aluguel", "Luz", "Internet", "Salário"
+  kind       String // "income" | "expense"
+  amount     Float? // null se variável (ex: luz muda todo mês)
+  dayOfMonth Int // 1-31
+  accountId  String?
+  account    Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  category   String?
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  incomes  Income[]
+  expenses Expense[]
+
+  @@index([isActive])
+}
+
+model PendingBotMessage {
+  id            String   @id @default(cuid())
+  chatId        String   @unique
+  intent        String
+  parsedPayload Json
+  promptMessage String
   rawMessage    String
-  source        String   @default("telegram") // "telegram" | "manual"
-  occurredAt    DateTime @default(now())
   createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  expiresAt     DateTime
+}
+
+// Tabela `Transaction` original, renomeada — arquivo permanente, a app não escreve mais nela.
+model LegacyTransaction {
+  id                 String   @id @default(cuid())
+  type               String
+  amount             Float
+  category           String   @default("Outros")
+  paymentMethod      String?
+  isRecurring        Boolean  @default(false)
+  description        String
+  rawMessage         String
+  source             String   @default("telegram")
+  occurredAt         DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  // Colunas que já existiam na tabela real (adicionadas fora do histórico de migrations) —
+  // preservadas aqui pra não serem derrubadas pelo diff do rename.
+  installmentCurrent Int?
+  installmentTotal   Int?
+
+  @@map("transaction_legacy")
 }

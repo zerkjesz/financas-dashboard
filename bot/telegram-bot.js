@@ -30,7 +30,7 @@ bot.on("message", async (msg) => {
   if (!text) return;
 
   try {
-    const result = await processTelegramMessage(text);
+    const result = await processTelegramMessage(text, String(chatId));
     await bot.sendMessage(chatId, result.reply);
   } catch (err) {
     console.error("Erro ao salvar transação:", err);
