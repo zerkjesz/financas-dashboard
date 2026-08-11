@@ -1,53 +1,72 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { formatMoney } from "@/lib/formatMoney";
+import { formatMoney, formatDate } from "@/lib/formatMoney";
+
+const HORIZON_OPTIONS = [7, 30, 60, 90, 180];
 
 const KIND_LABEL = {
   recurring_income: "Receita",
-  recurring_expense: "Conta",
+  bill: "Conta",
   card_bill: "Fatura",
 };
 
 export default function FluxoCaixaView() {
+  const [horizonDays, setHorizonDays] = useState(60);
   const [projection, setProjection] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/cash-flow")
+    setLoading(true);
+    fetch(`/api/cash-flow?days=${horizonDays}`)
       .then((r) => r.json())
       .then((data) => {
         setProjection(data);
         setLoading(false);
       });
-  }, []);
-
-  if (loading || !projection) return <div className="max-w-3xl mx-auto px-4 py-8 text-white/40">Carregando...</div>;
+  }, [horizonDays]);
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
-      <h1 className="text-2xl font-semibold mb-6">Fluxo de Caixa</h1>
+      <header className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <h1 className="text-2xl font-semibold">Fluxo de Caixa</h1>
+        <div className="flex gap-1">
+          {HORIZON_OPTIONS.map((d) => (
+            <button
+              key={d}
+              onClick={() => setHorizonDays(d)}
+              className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${horizonDays === d ? "bg-emerald-600 text-white" : "bg-white/5 text-white/60 hover:bg-white/10"}`}
+            >
+              {d}d
+            </button>
+          ))}
+        </div>
+      </header>
 
-      <div className="relative pl-6 border-l border-white/10 space-y-6">
-        <TimelineItem label="Hoje" value={formatMoney(projection.startingBalance)} highlight />
+      {(loading || !projection) ? (
+        <div className="text-white/40">Carregando...</div>
+      ) : (
+        <div className="relative pl-6 border-l border-white/10 space-y-6">
+          <TimelineItem label="Hoje" value={formatMoney(projection.startingBalance)} highlight />
 
-        {projection.timeline.length === 0 && (
-          <div className="text-white/40 text-sm pl-2">Nenhuma conta ou fatura prevista nos próximos {projection.horizonDays} dias.</div>
-        )}
+          {projection.timeline.length === 0 && (
+            <div className="text-white/40 text-sm pl-2">Nenhuma conta ou fatura prevista nos próximos {projection.horizonDays} dias.</div>
+          )}
 
-        {projection.timeline.map((event, i) => (
-          <TimelineItem
-            key={i}
-            label={event.label}
-            sublabel={`${KIND_LABEL[event.kind] || ""} · ${new Date(event.date).toLocaleDateString("pt-BR")} (em ${event.daysFromNow} dia${event.daysFromNow === 1 ? "" : "s"})`}
-            value={`${event.amount >= 0 ? "+" : "-"}${formatMoney(Math.abs(event.amount))}`}
-            tone={event.amount >= 0 ? "emerald" : "rose"}
-            balanceAfter={formatMoney(event.balanceAfter)}
-          />
-        ))}
+          {projection.timeline.map((event, i) => (
+            <TimelineItem
+              key={i}
+              label={event.label}
+              sublabel={`${KIND_LABEL[event.kind] || ""} · ${formatDate(event.date)} (em ${event.daysFromNow} dia${event.daysFromNow === 1 ? "" : "s"})`}
+              value={`${event.amount >= 0 ? "+" : "-"}${formatMoney(Math.abs(event.amount))}`}
+              tone={event.amount >= 0 ? "emerald" : "rose"}
+              balanceAfter={formatMoney(event.balanceAfter)}
+            />
+          ))}
 
-        <TimelineItem label={`Saldo previsto em ${projection.horizonDays} dias`} value={formatMoney(projection.projectedBalance)} highlight />
-      </div>
+          <TimelineItem label={`Saldo previsto em ${projection.horizonDays} dias`} value={formatMoney(projection.projectedBalance)} highlight />
+        </div>
+      )}
     </div>
   );
 }

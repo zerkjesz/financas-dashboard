@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import AddForm from "./AddForm.jsx";
 import BalanceCards from "./dashboard/BalanceCards.jsx";
 import CardsSection from "./dashboard/CardsSection.jsx";
-import UpcomingBills from "./dashboard/UpcomingBills.jsx";
+import UpcomingObligations from "./dashboard/UpcomingObligations.jsx";
+import AlertsPanel from "./dashboard/AlertsPanel.jsx";
 import IntelligenceSummary from "./dashboard/IntelligenceSummary.jsx";
 import CategoryBreakdown from "./dashboard/CategoryBreakdown.jsx";
 import TopExpenses from "./dashboard/TopExpenses.jsx";
@@ -55,10 +56,11 @@ export default function Dashboard() {
         />
       )}
 
+      <AlertsPanel alerts={data.alerts} />
       <IntelligenceSummary intelligence={data.intelligence} />
       <BalanceCards balances={data.balances} />
       <CardsSection cards={data.cards} />
-      <UpcomingBills bills={data.upcomingBills} />
+      <UpcomingObligations items={data.upcomingObligations} />
       <CategoryBreakdown entries={data.entries} />
       <TopExpenses entries={data.entries} />
       <TransactionsTable accounts={data.accounts} cards={data.cards} entries={data.entries} onChanged={load} />

@@ -22,6 +22,7 @@ model Account {
   balanceAdjustments BalanceAdjustment[]
   recurringRules     RecurringRule[]
   cards              Card[]
+  bills              Bill[]
 }
 
 model Card {
@@ -75,6 +76,8 @@ model Expense {
   card                Card?          @relation(fields: [cardId], references: [id], onDelete: SetNull)
   recurringRuleId     String?
   recurringRule       RecurringRule? @relation(fields: [recurringRuleId], references: [id], onDelete: SetNull)
+  billId              String?        @unique
+  bill                Bill?          @relation(fields: [billId], references: [id], onDelete: SetNull)
   isRecurring         Boolean        @default(false)
   source              String         @default("manual")
   rawMessage          String?
@@ -209,8 +212,47 @@ model RecurringRule {
 
   incomes  Income[]
   expenses Expense[]
+  bills    Bill[]
 
   @@index([isActive])
+}
+
+model Bill {
+  id              String         @id @default(cuid())
+  description     String
+  amount          Float
+  category        String?        @default("Outros")
+  accountId       String?
+  account         Account?       @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  dueDate         DateTime
+  recurringRuleId String?
+  recurringRule   RecurringRule? @relation(fields: [recurringRuleId], references: [id], onDelete: SetNull)
+  cycleMonth      String? // só quando gerada a partir de uma RecurringRule ("2026-09")
+  status          String         @default("pending") // "pending" | "paid" | "overdue" | "cancelled"
+  notes           String?
+  source          String         @default("manual") // "manual" | "telegram"
+  rawMessage      String?
+  paidAt          DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  expense Expense?
+
+  @@unique([recurringRuleId, cycleMonth])
+  @@index([dueDate])
+  @@index([status])
+}
+
+model Goal {
+  id           String    @id @default(cuid())
+  name         String
+  targetAmount Float
+  savedAmount  Float     @default(0)
+  targetDate   DateTime?
+  notes        String?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 }
 
 model PendingBotMessage {

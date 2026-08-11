@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { formatMoney } from "@/lib/formatMoney";
+import { formatMoney, formatDate } from "@/lib/formatMoney";
 import SummaryCard from "../components/SummaryCard.jsx";
 
 export default function ValeAlimentacaoView() {
@@ -36,7 +36,7 @@ export default function ValeAlimentacaoView() {
 
       {snapshot.nextRecharge && (
         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-white/70">
-          Próxima recarga: {new Date(snapshot.nextRecharge).toLocaleDateString("pt-BR")} ({snapshot.diasRestantes} dia{snapshot.diasRestantes === 1 ? "" : "s"} restante{snapshot.diasRestantes === 1 ? "" : "s"})
+          Próxima recarga: {formatDate(snapshot.nextRecharge)} ({snapshot.diasRestantes} dia{snapshot.diasRestantes === 1 ? "" : "s"} restante{snapshot.diasRestantes === 1 ? "" : "s"})
         </div>
       )}
     </div>

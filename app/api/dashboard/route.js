@@ -5,17 +5,21 @@ import { listCardsWithLimits } from "@/lib/cards";
 import { getOrCreateBill } from "@/lib/cardBillCalculator";
 import { buildFinancialSummary } from "@/lib/intelligence";
 import { buildVaSnapshot } from "@/lib/vaPanel";
-import { listUpcomingBills } from "@/lib/upcomingBills";
+import { listUpcomingObligations } from "@/lib/upcomingObligations";
+import { listBills } from "@/lib/bills";
+import { buildAlerts } from "@/lib/alerts";
 
 export async function GET() {
-  const [accounts, cardsBase, incomes, expenses, intelligence, vaSnapshot, upcomingBills] = await Promise.all([
+  const [accounts, cardsBase, incomes, expenses, intelligence, vaSnapshot, upcomingObligations, pendingBills, alerts] = await Promise.all([
     listAccountsWithBalances(),
     listCardsWithLimits(),
     prisma.income.findMany({ include: { account: true }, orderBy: { occurredAt: "desc" } }),
     prisma.expense.findMany({ include: { account: true, card: true }, orderBy: { occurredAt: "desc" } }),
     buildFinancialSummary(),
     buildVaSnapshot(),
-    listUpcomingBills(),
+    listUpcomingObligations(),
+    listBills({ status: ["pending", "overdue"] }),
+    buildAlerts(),
   ]);
 
   const currentCycle = new Date().toISOString().slice(0, 7);
@@ -57,7 +61,9 @@ export async function GET() {
     entries,
     intelligence,
     vaSnapshot,
-    upcomingBills,
+    upcomingObligations,
+    pendingBills,
+    alerts,
     balances: {
       caixaAtual,
       saldoTotal,

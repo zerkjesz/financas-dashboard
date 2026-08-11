@@ -5,10 +5,13 @@ import { usePathname } from "next/navigation";
 
 const LINKS = [
   { href: "/", label: "Dashboard" },
+  { href: "/contas-a-pagar", label: "Contas a Pagar" },
   { href: "/cartoes", label: "Cartões" },
   { href: "/parcelas", label: "Parcelas" },
   { href: "/fluxo-caixa", label: "Fluxo de Caixa" },
   { href: "/vale-alimentacao", label: "Vale Alimentação" },
+  { href: "/metas", label: "Metas" },
+  { href: "/indicadores", label: "Indicadores" },
 ];
 
 export default function NavBar() {

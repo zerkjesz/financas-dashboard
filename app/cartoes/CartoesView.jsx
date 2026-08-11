@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { formatMoney } from "@/lib/formatMoney";
+import { formatMoney, formatDate } from "@/lib/formatMoney";
 
 export default function CartoesView() {
   const [cards, setCards] = useState([]);
@@ -85,8 +85,8 @@ export default function CartoesView() {
                 {(bills[card.id] || []).map((bill) => (
                   <tr key={bill.id} className="border-t border-white/5">
                     <td className="px-3 py-2">{bill.cycleMonth}</td>
-                    <td className="px-3 py-2 text-white/60">{new Date(bill.closesAt).toLocaleDateString("pt-BR")}</td>
-                    <td className="px-3 py-2 text-white/60">{new Date(bill.dueAt).toLocaleDateString("pt-BR")}</td>
+                    <td className="px-3 py-2 text-white/60">{formatDate(bill.closesAt)}</td>
+                    <td className="px-3 py-2 text-white/60">{formatDate(bill.dueAt)}</td>
                     <td className="px-3 py-2 text-right">{formatMoney(bill.totalAmount)}</td>
                     <td className="px-3 py-2">
                       <span className={`text-xs px-1.5 py-0.5 rounded ${
