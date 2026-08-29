@@ -266,6 +266,19 @@ model PendingBotMessage {
   expiresAt     DateTime
 }
 
+// Estado do assistente guiado por botões (ex: /contas-novas). Um por chat — enquanto
+// existir, mensagens/toques daquele chat pertencem ao assistente, não ao parser normal.
+model BotWizardSession {
+  id        String   @id @default(cuid())
+  chatId    String   @unique
+  flow      String // "nova_conta"
+  step      String
+  data      Json
+  messageId Int? // id da mensagem do Telegram, pra editar em vez de mandar uma nova a cada passo
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+}
+
 // Tabela `Transaction` original, renomeada — arquivo permanente, a app não escreve mais nela.
 model LegacyTransaction {
   id                 String   @id @default(cuid())
