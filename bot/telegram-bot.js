@@ -1,6 +1,8 @@
 import "dotenv/config";
 import TelegramBot from "node-telegram-bot-api";
 import { processTelegramMessage } from "../lib/processTelegramMessage.js";
+import { startWizard, handleWizardCallback } from "../lib/botWizard.js";
+import { answerCallbackQuery } from "../lib/telegramApi.js";
 
 const { TELEGRAM_TOKEN } = process.env;
 
@@ -30,11 +32,26 @@ bot.on("message", async (msg) => {
   if (!text) return;
 
   try {
+    if (text.trim() === "/contas-novas") {
+      await startWizard(String(chatId), "nova_conta");
+      return;
+    }
+
     const result = await processTelegramMessage(text, String(chatId));
-    await bot.sendMessage(chatId, result.reply);
+    if (result.reply) await bot.sendMessage(chatId, result.reply);
   } catch (err) {
-    console.error("Erro ao salvar transação:", err);
+    console.error("Erro ao processar mensagem:", err);
     await bot.sendMessage(chatId, "Deu erro ao salvar, tenta de novo.");
+  }
+});
+
+bot.on("callback_query", async (query) => {
+  const chatId = query.message.chat.id;
+  try {
+    await answerCallbackQuery(query.id);
+    await handleWizardCallback(String(chatId), query.data);
+  } catch (err) {
+    console.error("Erro ao processar botão:", err);
   }
 });
 
