@@ -1,7 +1,7 @@
 import "dotenv/config";
 import TelegramBot from "node-telegram-bot-api";
 import { processTelegramMessage } from "../lib/processTelegramMessage.js";
-import { startWizard, handleWizardCallback } from "../lib/botWizard.js";
+import { startWizard, handleWizardCallback, MENU_FLOWS, MAIS_OPCOES_LABEL, MAIS_OPCOES_TEXT, sendMainMenu } from "../lib/botWizard.js";
 import { answerCallbackQuery } from "../lib/telegramApi.js";
 
 const { TELEGRAM_TOKEN } = process.env;
@@ -30,10 +30,19 @@ bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
   if (!text) return;
+  const trimmed = text.trim();
 
   try {
-    if (text.trim() === "/contas-novas") {
-      await startWizard(String(chatId), "nova_conta");
+    if (trimmed === "/start") {
+      await sendMainMenu(String(chatId), "Oi! Usa os botões aqui embaixo pra registrar rapidinho, ou manda uma mensagem tipo \"50 mercado pix\" se preferir escrever.");
+      return;
+    }
+    if (MENU_FLOWS[trimmed]) {
+      await startWizard(String(chatId), MENU_FLOWS[trimmed]);
+      return;
+    }
+    if (trimmed === MAIS_OPCOES_LABEL) {
+      await bot.sendMessage(chatId, MAIS_OPCOES_TEXT);
       return;
     }
 

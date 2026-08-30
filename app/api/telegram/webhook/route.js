@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { processTelegramMessage } from "@/lib/processTelegramMessage";
-import { startWizard, handleWizardCallback } from "@/lib/botWizard";
+import { startWizard, handleWizardCallback, MENU_FLOWS, MAIS_OPCOES_LABEL, MAIS_OPCOES_TEXT, sendMainMenu } from "@/lib/botWizard";
 import { sendMessage, answerCallbackQuery } from "@/lib/telegramApi";
 
 // Usado apenas quando hospedado (Vercel). O Telegram chama esta URL a cada
@@ -27,9 +27,18 @@ export async function POST(request) {
   if (!text || !chatId) {
     return NextResponse.json({ ok: true });
   }
+  const trimmed = text.trim();
 
-  if (text.trim() === "/contas-novas") {
-    await startWizard(String(chatId), "nova_conta");
+  if (trimmed === "/start") {
+    await sendMainMenu(String(chatId), "Oi! Usa os botões aqui embaixo pra registrar rapidinho, ou manda uma mensagem tipo \"50 mercado pix\" se preferir escrever.");
+    return NextResponse.json({ ok: true });
+  }
+  if (MENU_FLOWS[trimmed]) {
+    await startWizard(String(chatId), MENU_FLOWS[trimmed]);
+    return NextResponse.json({ ok: true });
+  }
+  if (trimmed === MAIS_OPCOES_LABEL) {
+    await sendMessage(chatId, MAIS_OPCOES_TEXT);
     return NextResponse.json({ ok: true });
   }
 
