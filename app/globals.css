@@ -1,77 +1,51 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap");
 @import "tailwindcss";
 
+/* Design system — dashboard financeiro escuro, denso em dados, sóbrio.
+   Baseado em recomendação de "Financial Dashboard" (Dark Mode OLED + Data-Dense). */
+@theme {
+  --color-bg: #020617;
+  --color-surface: #0f172a;
+  --color-surface-2: #1e293b;
+  --color-border: #1e293b;
+  --color-border-strong: #334155;
+  --color-muted: #94a3b8;
+  --color-positive: #22c55e;
+  --color-positive-soft: #4ade80;
+  --color-negative: #f87171;
+  --color-warning: #fbbf24;
+  --color-info: #38bdf8;
+
+  --font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
 :root {
-  --background: #0b0f14;
-  --foreground: #e8edf2;
+  --background: var(--color-bg);
+  --foreground: #f8fafc;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
+  font-feature-settings: "tnum" 1; /* números tabulares — colunas de valor alinham certinho */
 }
 
-.aurora-bg {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  overflow: hidden;
-  pointer-events: none;
+/* Números monetários/tabulares em fonte mono — mais fácil de comparar valor por valor. */
+.tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
-.aurora-blob {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(90px);
-  opacity: 0.35;
-  mix-blend-mode: screen;
-  will-change: transform;
+::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
 }
-
-.aurora-blob--emerald {
-  width: 480px;
-  height: 480px;
-  top: -140px;
-  left: -120px;
-  background: radial-gradient(circle at 30% 30%, #10b981, transparent 70%);
-  animation: aurora-drift-1 28s ease-in-out infinite alternate;
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 999px;
 }
-
-.aurora-blob--sky {
-  width: 420px;
-  height: 420px;
-  top: 15%;
-  right: -160px;
-  background: radial-gradient(circle at 60% 40%, #38bdf8, transparent 70%);
-  animation: aurora-drift-2 34s ease-in-out infinite alternate;
-}
-
-.aurora-blob--violet {
-  width: 520px;
-  height: 520px;
-  bottom: -180px;
-  left: 15%;
-  background: radial-gradient(circle at 50% 50%, #a78bfa, transparent 70%);
-  animation: aurora-drift-3 40s ease-in-out infinite alternate;
-}
-
-@keyframes aurora-drift-1 {
-  from { transform: translate(0, 0) scale(1); }
-  to { transform: translate(70px, 90px) scale(1.15); }
-}
-
-@keyframes aurora-drift-2 {
-  from { transform: translate(0, 0) scale(1); }
-  to { transform: translate(-80px, 60px) scale(1.1); }
-}
-
-@keyframes aurora-drift-3 {
-  from { transform: translate(0, 0) scale(1); }
-  to { transform: translate(50px, -70px) scale(1.08); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .aurora-blob {
-    animation: none;
-  }
+::-webkit-scrollbar-track {
+  background: transparent;
 }

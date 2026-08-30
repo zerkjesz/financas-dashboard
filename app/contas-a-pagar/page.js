@@ -5,7 +5,7 @@ export default function Page() {
   return (
     <>
       <ContasAPagarView />
-      <hr className="border-white/10 max-w-5xl mx-auto" />
+      <hr className="border-border max-w-5xl mx-auto" />
       <FluxoCaixaView />
     </>
   );

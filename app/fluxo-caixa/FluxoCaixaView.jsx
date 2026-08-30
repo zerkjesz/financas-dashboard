@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { formatMoney, formatDate } from "@/lib/formatMoney";
+import { SkeletonBlock } from "../components/Skeleton.jsx";
 
 const HORIZON_OPTIONS = [7, 30, 60, 90, 180];
 
@@ -29,13 +30,13 @@ export default function FluxoCaixaView() {
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
       <header className="flex flex-wrap items-center justify-between gap-3 mb-6">
-        <h1 className="text-2xl font-semibold">Fluxo de Caixa</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Fluxo de Caixa</h1>
         <div className="flex gap-1">
           {HORIZON_OPTIONS.map((d) => (
             <button
               key={d}
               onClick={() => setHorizonDays(d)}
-              className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${horizonDays === d ? "bg-emerald-600 text-white" : "bg-white/5 text-white/60 hover:bg-white/10"}`}
+              className={`rounded-lg px-3 py-1.5 text-sm transition-colors cursor-pointer ${horizonDays === d ? "bg-surface-2 text-white border border-border-strong" : "text-muted hover:text-white hover:bg-surface-2/50"}`}
             >
               {d}d
             </button>
@@ -44,13 +45,13 @@ export default function FluxoCaixaView() {
       </header>
 
       {(loading || !projection) ? (
-        <div className="text-white/40">Carregando...</div>
+        <SkeletonBlock className="h-72" />
       ) : (
-        <div className="relative pl-6 border-l border-white/10 space-y-6">
+        <div className="relative pl-6 border-l border-border space-y-6">
           <TimelineItem label="Hoje" value={formatMoney(projection.startingBalance)} highlight />
 
           {projection.timeline.length === 0 && (
-            <div className="text-white/40 text-sm pl-2">Nenhuma conta ou fatura prevista nos próximos {projection.horizonDays} dias.</div>
+            <div className="text-muted text-sm pl-2">Nenhuma conta ou fatura prevista nos próximos {projection.horizonDays} dias.</div>
           )}
 
           {projection.timeline.map((event, i) => (
@@ -59,7 +60,7 @@ export default function FluxoCaixaView() {
               label={event.label}
               sublabel={`${KIND_LABEL[event.kind] || ""} · ${formatDate(event.date)} (em ${event.daysFromNow} dia${event.daysFromNow === 1 ? "" : "s"})`}
               value={`${event.amount >= 0 ? "+" : "-"}${formatMoney(Math.abs(event.amount))}`}
-              tone={event.amount >= 0 ? "emerald" : "rose"}
+              tone={event.amount >= 0 ? "positive" : "negative"}
               balanceAfter={formatMoney(event.balanceAfter)}
             />
           ))}
@@ -74,15 +75,15 @@ export default function FluxoCaixaView() {
 function TimelineItem({ label, sublabel, value, tone, balanceAfter, highlight }) {
   return (
     <div className="relative pl-4">
-      <div className={`absolute -left-[29px] top-1 w-3 h-3 rounded-full border-2 ${highlight ? "bg-emerald-500 border-emerald-500" : "bg-[#0b0f14] border-white/30"}`} />
-      <div className="flex items-center justify-between">
+      <div className={`absolute -left-[29px] top-1 w-3 h-3 rounded-full border-2 ${highlight ? "bg-positive border-positive" : "bg-bg border-border-strong"}`} />
+      <div className="flex items-center justify-between gap-3">
         <div>
-          <div className={highlight ? "font-medium" : ""}>{label}</div>
-          {sublabel && <div className="text-xs text-white/50">{sublabel}</div>}
+          <div className={highlight ? "font-medium text-white" : "text-slate-200"}>{label}</div>
+          {sublabel && <div className="text-xs text-muted">{sublabel}</div>}
         </div>
         <div className="text-right">
-          <div className={tone === "emerald" ? "text-emerald-400" : tone === "rose" ? "text-rose-400" : "font-medium"}>{value}</div>
-          {balanceAfter && <div className="text-xs text-white/40">saldo: {balanceAfter}</div>}
+          <div className={`tabular ${tone === "positive" ? "text-positive" : tone === "negative" ? "text-negative" : "font-medium text-white"}`}>{value}</div>
+          {balanceAfter && <div className="text-xs text-muted tabular">saldo: {balanceAfter}</div>}
         </div>
       </div>
     </div>

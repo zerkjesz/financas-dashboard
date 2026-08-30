@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { formatMoney, formatDate } from "@/lib/formatMoney";
-import SummaryCard from "../SummaryCard.jsx";
 
 export default function ValeAlimentacaoCard() {
   const [snapshot, setSnapshot] = useState(null);
@@ -19,23 +18,31 @@ export default function ValeAlimentacaoCard() {
 
   if (loading || !snapshot) return null;
 
+  const stats = [
+    { label: "Recebido no ciclo", value: snapshot.recebido, tone: "text-white" },
+    { label: "Gasto no ciclo", value: snapshot.gasto, tone: "text-negative" },
+    { label: "Saldo atual", value: snapshot.balance, tone: "text-white" },
+    { label: "Meta diária", value: snapshot.metaDiaria, tone: "text-positive" },
+  ];
+
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 mb-6">
-      <div className="text-sm text-white/50 mb-3">Vale Alimentação</div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <SummaryCard label="Recebido no ciclo" value={snapshot.recebido} />
-        <SummaryCard label="Gasto no ciclo" value={snapshot.gasto} tone="rose" />
-        <SummaryCard label="Saldo atual" value={snapshot.balance} />
-        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
-          <div className="text-xs text-white/50 mb-1">Meta diária</div>
-          <div className="text-xl font-semibold">{formatMoney(snapshot.metaDiaria)}</div>
-        </div>
+    <div className="rounded-xl border border-border bg-surface p-4 mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm font-medium text-white">Vale Alimentação</span>
+        {snapshot.nextRecharge && (
+          <span className="text-xs text-muted">
+            próxima recarga {formatDate(snapshot.nextRecharge)} · {snapshot.diasRestantes} dia{snapshot.diasRestantes === 1 ? "" : "s"}
+          </span>
+        )}
       </div>
-      {snapshot.nextRecharge && (
-        <div className="text-sm text-white/50 mt-3">
-          Próxima recarga: {formatDate(snapshot.nextRecharge)} ({snapshot.diasRestantes} dia{snapshot.diasRestantes === 1 ? "" : "s"})
-        </div>
-      )}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {stats.map((s) => (
+          <div key={s.label} className="rounded-lg border border-border bg-surface-2/40 p-3">
+            <div className="text-xs text-muted mb-1">{s.label}</div>
+            <div className={`tabular text-lg font-semibold ${s.tone}`}>{formatMoney(s.value)}</div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

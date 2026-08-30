@@ -2,6 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { formatMoney, formatDate } from "@/lib/formatMoney";
+import { SkeletonBlock } from "../components/Skeleton.jsx";
+
+const inputClass = "bg-surface-2 border border-border rounded-md px-2 py-1.5 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-info";
+
+function TrashIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M4 7h16M9 7V5a2 2 0 012-2h2a2 2 0 012 2v2m2 0v13a2 2 0 01-2 2H9a2 2 0 01-2-2V7h10z" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
 
 export default function MetasView() {
   const [goals, setGoals] = useState([]);
@@ -37,20 +48,30 @@ export default function MetasView() {
     load();
   }
 
-  if (loading) return <div className="max-w-5xl mx-auto px-4 py-8 text-white/40">Carregando...</div>;
+  if (loading) {
+    return (
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        <SkeletonBlock className="h-8 w-32 mb-6" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <SkeletonBlock className="h-40" />
+          <SkeletonBlock className="h-40" />
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-6 sm:py-8">
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
       <header className="flex flex-wrap items-center justify-between gap-3 mb-6">
-        <h1 className="text-2xl font-semibold">Metas</h1>
-        <button onClick={() => setShowForm((v) => !v)} className="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-sm font-medium transition-colors">
+        <h1 className="text-2xl font-semibold tracking-tight">Metas</h1>
+        <button onClick={() => setShowForm((v) => !v)} className="rounded-lg bg-positive hover:bg-positive-soft px-4 py-2 text-sm font-medium text-slate-950 transition-colors cursor-pointer">
           + Nova meta
         </button>
       </header>
 
       {showForm && <GoalForm onSubmit={createGoal} onCancel={() => setShowForm(false)} />}
 
-      {goals.length === 0 && <div className="text-white/40">Nenhuma meta ainda.</div>}
+      {goals.length === 0 && <div className="text-muted">Nenhuma meta ainda.</div>}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {goals.map((goal) => (
@@ -66,20 +87,22 @@ function GoalCard({ goal, onAdd, onRemove }) {
   const pct = Math.min(100, Math.round((goal.savedAmount / goal.targetAmount) * 100));
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+    <div className="rounded-xl border border-border bg-surface p-4">
       <div className="flex items-center justify-between mb-2">
-        <span className="font-medium">{goal.name}</span>
-        <button onClick={onRemove} className="text-white/30 hover:text-rose-400 text-xs">✕</button>
+        <span className="font-medium text-white">{goal.name}</span>
+        <button onClick={onRemove} className="text-muted hover:text-negative cursor-pointer" title="Remover" aria-label="Remover">
+          <TrashIcon />
+        </button>
       </div>
-      <div className="h-2 rounded-full bg-white/5 overflow-hidden mb-2">
-        <div className="h-full rounded-full bg-emerald-500" style={{ width: `${pct}%` }} />
+      <div className="h-1.5 rounded-full bg-surface-2 overflow-hidden mb-2">
+        <div className="h-full rounded-full bg-positive" style={{ width: `${pct}%` }} />
       </div>
-      <div className="flex justify-between text-xs text-white/60 mb-3">
+      <div className="flex justify-between text-xs text-muted mb-3 tabular">
         <span>{formatMoney(goal.savedAmount)} guardado</span>
         <span>falta {formatMoney(goal.remaining)}</span>
       </div>
       {goal.forecastDate && (
-        <div className="text-xs text-white/40 mb-3">
+        <div className="text-xs text-muted mb-3">
           Previsão: {formatDate(goal.forecastDate)}
           {goal.forecastBasis === "taxa_media" ? " (pela taxa média)" : ""}
         </div>
@@ -89,7 +112,7 @@ function GoalCard({ goal, onAdd, onRemove }) {
           value={addValue}
           onChange={(e) => setAddValue(e.target.value)}
           placeholder="guardar mais..."
-          className="bg-white/5 border border-white/10 rounded px-2 py-1 text-xs flex-1"
+          className={`${inputClass} flex-1 text-xs py-1`}
         />
         <button
           onClick={() => {
@@ -99,7 +122,7 @@ function GoalCard({ goal, onAdd, onRemove }) {
               setAddValue("");
             }
           }}
-          className="rounded bg-emerald-600 hover:bg-emerald-500 px-2 py-1 text-xs"
+          className="rounded bg-positive hover:bg-positive-soft text-slate-950 px-2 py-1 text-xs font-medium cursor-pointer transition-colors"
         >
           Guardar
         </button>
@@ -121,21 +144,21 @@ function GoalForm({ onSubmit, onCancel }) {
   }
 
   return (
-    <form onSubmit={submit} className="rounded-xl border border-white/10 bg-white/[0.03] p-4 mb-6 flex flex-wrap gap-3 items-end">
+    <form onSubmit={submit} className="rounded-xl border border-border bg-surface p-4 mb-6 flex flex-wrap gap-3 items-end">
       <div>
-        <label className="block text-xs text-white/50 mb-1">Nome</label>
-        <input value={name} onChange={(e) => setName(e.target.value)} className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm" />
+        <label className="block text-xs text-muted mb-1">Nome</label>
+        <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
       </div>
       <div>
-        <label className="block text-xs text-white/50 mb-1">Valor alvo</label>
-        <input value={targetAmount} onChange={(e) => setTargetAmount(e.target.value)} placeholder="0,00" className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm w-28" />
+        <label className="block text-xs text-muted mb-1">Valor alvo</label>
+        <input value={targetAmount} onChange={(e) => setTargetAmount(e.target.value)} placeholder="0,00" className={`${inputClass} w-28`} />
       </div>
       <div>
-        <label className="block text-xs text-white/50 mb-1">Data alvo (opcional)</label>
-        <input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm" />
+        <label className="block text-xs text-muted mb-1">Data alvo (opcional)</label>
+        <input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} className={inputClass} />
       </div>
-      <button type="submit" className="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-4 py-1.5 text-sm font-medium">Salvar</button>
-      <button type="button" onClick={onCancel} className="rounded-lg bg-white/5 hover:bg-white/10 px-4 py-1.5 text-sm">Cancelar</button>
+      <button type="submit" className="rounded-lg bg-positive hover:bg-positive-soft px-4 py-1.5 text-sm font-medium text-slate-950 cursor-pointer transition-colors">Salvar</button>
+      <button type="button" onClick={onCancel} className="rounded-lg bg-surface-2 hover:bg-border px-4 py-1.5 text-sm text-slate-200 cursor-pointer transition-colors">Cancelar</button>
     </form>
   );
 }

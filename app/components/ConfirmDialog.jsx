@@ -5,20 +5,20 @@ export default function ConfirmDialog({ message, onConfirm, onCancel }) {
       onClick={onCancel}
     >
       <div
-        className="w-full max-w-sm rounded-xl border border-white/10 bg-[#12161c] p-5 shadow-xl"
+        className="w-full max-w-sm rounded-xl border border-border-strong bg-surface p-5 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <p className="text-sm text-white/90 mb-4">{message}</p>
+        <p className="text-sm text-slate-200 mb-4">{message}</p>
         <div className="flex justify-end gap-2">
           <button
             onClick={onCancel}
-            className="rounded-lg bg-white/5 hover:bg-white/10 px-3 py-1.5 text-sm transition-colors"
+            className="rounded-lg bg-surface-2 hover:bg-border px-3 py-1.5 text-sm text-slate-200 transition-colors cursor-pointer"
           >
             Cancelar
           </button>
           <button
             onClick={onConfirm}
-            className="rounded-lg bg-rose-600 hover:bg-rose-500 px-3 py-1.5 text-sm font-medium transition-colors"
+            className="rounded-lg bg-negative hover:bg-red-400 px-3 py-1.5 text-sm font-medium text-slate-950 transition-colors cursor-pointer"
           >
             Excluir
           </button>

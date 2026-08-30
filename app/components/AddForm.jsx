@@ -13,7 +13,7 @@ const TYPES = [
   { value: "limit_update", label: "Ajuste de limite do cartão" },
 ];
 
-const inputClass = "bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm";
+const inputClass = "bg-surface-2 border border-border rounded-md px-2 py-1.5 text-sm text-slate-200 placeholder:text-muted focus:outline-none focus:ring-1 focus:ring-info";
 
 export default function AddForm({ accounts, cards, onSubmitted, onCancel }) {
   const [type, setType] = useState("expense");
@@ -83,9 +83,9 @@ export default function AddForm({ accounts, cards, onSubmitted, onCancel }) {
     type === "balance_adjustment" ? "Novo saldo" : type === "limit_update" ? "Limite disponível" : "Valor";
 
   return (
-    <form onSubmit={submit} className="rounded-xl border border-white/10 bg-white/[0.03] p-4 mb-6 flex flex-wrap gap-3 items-end">
+    <form onSubmit={submit} className="rounded-xl border border-border bg-surface p-4 mb-6 flex flex-wrap gap-3 items-end">
       <div>
-        <label className="block text-xs text-white/50 mb-1">Tipo</label>
+        <label className="block text-xs text-muted mb-1">Tipo</label>
         <select value={type} onChange={(e) => setType(e.target.value)} className={inputClass}>
           {TYPES.map((t) => (
             <option key={t.value} value={t.value}>{t.label}</option>
@@ -94,13 +94,13 @@ export default function AddForm({ accounts, cards, onSubmitted, onCancel }) {
       </div>
 
       <div>
-        <label className="block text-xs text-white/50 mb-1">{amountLabel}</label>
+        <label className="block text-xs text-muted mb-1">{amountLabel}</label>
         <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0,00" className={`${inputClass} w-28`} />
       </div>
 
       {(type === "income" || type === "expense" || type === "installment_purchase") && (
         <div>
-          <label className="block text-xs text-white/50 mb-1">Categoria</label>
+          <label className="block text-xs text-muted mb-1">Categoria</label>
           <select value={category} onChange={(e) => setCategory(e.target.value)} className={inputClass}>
             {CATEGORIES.map((c) => (
               <option key={c} value={c}>{c}</option>
@@ -136,7 +136,7 @@ export default function AddForm({ accounts, cards, onSubmitted, onCancel }) {
         <>
           <SelectField label="Cartão" value={cardId} onChange={setCardId} options={cards.map((c) => [c.id, c.name])} />
           <div>
-            <label className="block text-xs text-white/50 mb-1">Parcelas</label>
+            <label className="block text-xs text-muted mb-1">Parcelas</label>
             <input value={installmentCount} onChange={(e) => setInstallmentCount(e.target.value)} placeholder="10" className={`${inputClass} w-20`} />
           </div>
         </>
@@ -158,23 +158,23 @@ export default function AddForm({ accounts, cards, onSubmitted, onCancel }) {
       )}
 
       <div className="flex-1 min-w-[160px]">
-        <label className="block text-xs text-white/50 mb-1">Descrição</label>
+        <label className="block text-xs text-muted mb-1">Descrição</label>
         <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="ex: mercado da semana" className={`${inputClass} w-full`} />
       </div>
 
       {(type === "income" || type === "expense") && (
-        <label className="flex items-center gap-1.5 text-xs text-white/60 pb-2">
-          <input type="checkbox" checked={isRecurring} onChange={(e) => setIsRecurring(e.target.checked)} />
+        <label className="flex items-center gap-1.5 text-xs text-muted pb-2 cursor-pointer">
+          <input type="checkbox" className="cursor-pointer accent-info" checked={isRecurring} onChange={(e) => setIsRecurring(e.target.checked)} />
           Fixo/recorrente
         </label>
       )}
 
-      {error && <div className="w-full text-xs text-rose-400">{error}</div>}
+      {error && <div className="w-full text-xs text-negative">{error}</div>}
 
-      <button type="submit" disabled={submitting} className="rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-4 py-1.5 text-sm font-medium transition-colors">
+      <button type="submit" disabled={submitting} className="rounded-lg bg-positive hover:bg-positive-soft disabled:opacity-50 px-4 py-1.5 text-sm font-medium text-slate-950 transition-colors cursor-pointer">
         {submitting ? "Salvando..." : "Salvar"}
       </button>
-      <button type="button" onClick={onCancel} className="rounded-lg bg-white/5 hover:bg-white/10 px-4 py-1.5 text-sm transition-colors">
+      <button type="button" onClick={onCancel} className="rounded-lg bg-surface-2 hover:bg-border px-4 py-1.5 text-sm text-slate-200 transition-colors cursor-pointer">
         Cancelar
       </button>
     </form>
@@ -184,7 +184,7 @@ export default function AddForm({ accounts, cards, onSubmitted, onCancel }) {
 function SelectField({ label, value, onChange, options }) {
   return (
     <div>
-      <label className="block text-xs text-white/50 mb-1">{label}</label>
+      <label className="block text-xs text-muted mb-1">{label}</label>
       <select value={value} onChange={(e) => onChange(e.target.value)} className={inputClass}>
         {options.map(([val, text]) => (
           <option key={val} value={val}>{text}</option>
