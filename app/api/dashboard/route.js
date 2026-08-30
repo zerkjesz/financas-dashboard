@@ -8,18 +8,23 @@ import { buildVaSnapshot } from "@/lib/vaPanel";
 import { listUpcomingObligations } from "@/lib/upcomingObligations";
 import { listBills } from "@/lib/bills";
 import { buildAlerts } from "@/lib/alerts";
+import { buildCashFlowProjection } from "@/lib/cashFlowProjection";
 
 export async function GET() {
-  const [accounts, cardsBase, incomes, expenses, intelligence, vaSnapshot, upcomingObligations, pendingBills, alerts] = await Promise.all([
-    listAccountsWithBalances(),
-    listCardsWithLimits(),
+  // Saldo/limite de contas e cartões é a parte mais pesada (várias queries por conta/cartão)
+  // e é usada em quase tudo abaixo — calcula uma vez só e reaproveita, em vez de deixar
+  // intelligence/alerts/cash-flow recalcularem cada um por conta própria.
+  const [accounts, cardsBase] = await Promise.all([listAccountsWithBalances(), listCardsWithLimits()]);
+  const projection30 = await buildCashFlowProjection({ horizonDays: 30, accounts, cards: cardsBase });
+
+  const [incomes, expenses, intelligence, vaSnapshot, upcomingObligations, pendingBills, alerts] = await Promise.all([
     prisma.income.findMany({ include: { account: true }, orderBy: { occurredAt: "desc" } }),
     prisma.expense.findMany({ include: { account: true, card: true }, orderBy: { occurredAt: "desc" } }),
-    buildFinancialSummary(),
+    buildFinancialSummary({ accounts, cards: cardsBase, projection30 }),
     buildVaSnapshot(),
-    listUpcomingObligations(),
+    listUpcomingObligations({ cards: cardsBase }),
     listBills({ status: ["pending", "overdue"] }),
-    buildAlerts(),
+    buildAlerts({ projection30 }),
   ]);
 
   const currentCycle = new Date().toISOString().slice(0, 7);
