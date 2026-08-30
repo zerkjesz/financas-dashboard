@@ -1,5 +1,5 @@
-import FluxoCaixaView from "./FluxoCaixaView.jsx";
+import { redirect } from "next/navigation";
 
 export default function Page() {
-  return <FluxoCaixaView />;
+  redirect("/contas-a-pagar");
 }

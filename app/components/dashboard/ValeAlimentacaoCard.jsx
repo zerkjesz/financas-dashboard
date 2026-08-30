@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { formatMoney, formatDate } from "@/lib/formatMoney";
-import SummaryCard from "../components/SummaryCard.jsx";
+import SummaryCard from "../SummaryCard.jsx";
 
-export default function ValeAlimentacaoView() {
+export default function ValeAlimentacaoCard() {
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -17,26 +17,23 @@ export default function ValeAlimentacaoView() {
       });
   }, []);
 
-  if (loading) return <div className="max-w-3xl mx-auto px-4 py-8 text-white/40">Carregando...</div>;
-  if (!snapshot) return <div className="max-w-3xl mx-auto px-4 py-8 text-white/40">Conta de Vale Alimentação não encontrada.</div>;
+  if (loading || !snapshot) return null;
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
-      <h1 className="text-2xl font-semibold mb-6">Vale Alimentação</h1>
-
-      <div className="grid grid-cols-2 gap-4 mb-6">
+    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 mb-6">
+      <div className="text-sm text-white/50 mb-3">Vale Alimentação</div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <SummaryCard label="Recebido no ciclo" value={snapshot.recebido} />
         <SummaryCard label="Gasto no ciclo" value={snapshot.gasto} tone="rose" />
         <SummaryCard label="Saldo atual" value={snapshot.balance} />
         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
-          <div className="text-xs text-white/50 mb-1">Meta diária de consumo</div>
+          <div className="text-xs text-white/50 mb-1">Meta diária</div>
           <div className="text-xl font-semibold">{formatMoney(snapshot.metaDiaria)}</div>
         </div>
       </div>
-
       {snapshot.nextRecharge && (
-        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-white/70">
-          Próxima recarga: {formatDate(snapshot.nextRecharge)} ({snapshot.diasRestantes} dia{snapshot.diasRestantes === 1 ? "" : "s"} restante{snapshot.diasRestantes === 1 ? "" : "s"})
+        <div className="text-sm text-white/50 mt-3">
+          Próxima recarga: {formatDate(snapshot.nextRecharge)} ({snapshot.diasRestantes} dia{snapshot.diasRestantes === 1 ? "" : "s"})
         </div>
       )}
     </div>

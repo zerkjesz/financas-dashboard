@@ -1,5 +1,5 @@
-import ValeAlimentacaoView from "./ValeAlimentacaoView.jsx";
+import { redirect } from "next/navigation";
 
 export default function Page() {
-  return <ValeAlimentacaoView />;
+  redirect("/");
 }

@@ -1,5 +1,5 @@
-import ParcelasView from "./ParcelasView.jsx";
+import { redirect } from "next/navigation";
 
 export default function Page() {
-  return <ParcelasView />;
+  redirect("/cartoes");
 }

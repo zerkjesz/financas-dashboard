@@ -1,5 +1,5 @@
-import IndicadoresView from "./IndicadoresView.jsx";
+import { redirect } from "next/navigation";
 
 export default function Page() {
-  return <IndicadoresView />;
+  redirect("/metas");
 }

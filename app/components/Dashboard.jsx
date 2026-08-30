@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import AddForm from "./AddForm.jsx";
 import BalanceCards from "./dashboard/BalanceCards.jsx";
 import CardsSection from "./dashboard/CardsSection.jsx";
+import ValeAlimentacaoCard from "./dashboard/ValeAlimentacaoCard.jsx";
 import UpcomingObligations from "./dashboard/UpcomingObligations.jsx";
 import AlertsPanel from "./dashboard/AlertsPanel.jsx";
 import IntelligenceSummary from "./dashboard/IntelligenceSummary.jsx";
@@ -60,6 +61,7 @@ export default function Dashboard() {
       <IntelligenceSummary intelligence={data.intelligence} />
       <BalanceCards balances={data.balances} />
       <CardsSection cards={data.cards} />
+      <ValeAlimentacaoCard />
       <UpcomingObligations items={data.upcomingObligations} />
       <CategoryBreakdown entries={data.entries} />
       <TopExpenses entries={data.entries} />

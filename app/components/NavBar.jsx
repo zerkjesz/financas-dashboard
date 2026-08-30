@@ -4,14 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const LINKS = [
-  { href: "/", label: "Dashboard" },
-  { href: "/contas-a-pagar", label: "Contas a Pagar" },
-  { href: "/cartoes", label: "Cartões" },
-  { href: "/parcelas", label: "Parcelas" },
-  { href: "/fluxo-caixa", label: "Fluxo de Caixa" },
-  { href: "/vale-alimentacao", label: "Vale Alimentação" },
-  { href: "/metas", label: "Metas" },
-  { href: "/indicadores", label: "Indicadores" },
+  { href: "/", label: "Início" },
+  { href: "/cartoes", label: "Cartões & Parcelas" },
+  { href: "/contas-a-pagar", label: "Contas a Pagar & Fluxo de Caixa" },
+  { href: "/metas", label: "Metas & Indicadores" },
 ];
 
 export default function NavBar() {
