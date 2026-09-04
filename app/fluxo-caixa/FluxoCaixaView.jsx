@@ -28,7 +28,7 @@ export default function FluxoCaixaView() {
   }, [horizonDays]);
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
+    <div className="max-w-3xl mx-auto">
       <header className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Fluxo de Caixa</h1>
         <div className="flex gap-1">

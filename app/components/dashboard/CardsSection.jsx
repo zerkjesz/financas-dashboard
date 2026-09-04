@@ -4,7 +4,7 @@ export default function CardsSection({ cards }) {
   if (cards.length === 0) return null;
 
   return (
-    <div className="rounded-xl border border-border bg-surface p-4 mb-6">
+    <div className="rounded-xl border border-border bg-surface p-4 h-full">
       <div className="text-sm font-medium text-white mb-3">Cartões</div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {cards.map((card) => {

@@ -35,7 +35,7 @@ export default function ParcelasView() {
 
   if (loading) {
     return (
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+      <div>
         <SkeletonBlock className="h-8 w-32 mb-6" />
         <SkeletonBlock className="h-40" />
       </div>
@@ -43,7 +43,7 @@ export default function ParcelasView() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+    <div>
       <h1 className="text-2xl font-semibold tracking-tight mb-6">Parcelas</h1>
 
       {purchases.length === 0 && <div className="text-muted">Nenhuma compra parcelada registrada.</div>}

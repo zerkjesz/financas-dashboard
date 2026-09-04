@@ -62,13 +62,36 @@ export default function Dashboard() {
       )}
 
       <AlertsPanel alerts={data.alerts} />
-      <IntelligenceSummary intelligence={data.intelligence} />
-      <BalanceCards balances={data.balances} />
-      <CardsSection cards={data.cards} />
-      <ValeAlimentacaoCard />
-      <UpcomingObligations items={data.upcomingObligations} />
-      <CategoryBreakdown entries={data.entries} />
-      <TopExpenses entries={data.entries} />
+
+      <div className="mb-4">
+        <BalanceCards balances={data.balances} />
+      </div>
+
+      <div className="mb-4">
+        <IntelligenceSummary intelligence={data.intelligence} />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 mb-4">
+        <div className="lg:col-span-7">
+          <CardsSection cards={data.cards} />
+        </div>
+        <div className="lg:col-span-5">
+          <ValeAlimentacaoCard />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 mb-4">
+        <div className="lg:col-span-5">
+          <CategoryBreakdown entries={data.entries} />
+        </div>
+        <div className="lg:col-span-4">
+          <TopExpenses entries={data.entries} />
+        </div>
+        <div className="lg:col-span-3">
+          <UpcomingObligations items={data.upcomingObligations} />
+        </div>
+      </div>
+
       <TransactionsTable accounts={data.accounts} cards={data.cards} entries={data.entries} onChanged={load} />
     </div>
   );

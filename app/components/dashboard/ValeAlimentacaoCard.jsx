@@ -26,16 +26,16 @@ export default function ValeAlimentacaoCard() {
   ];
 
   return (
-    <div className="rounded-xl border border-border bg-surface p-4 mb-6">
-      <div className="flex items-center justify-between mb-3">
+    <div className="rounded-xl border border-border bg-surface p-4 h-full flex flex-col">
+      <div className="flex items-center justify-between mb-3 gap-2">
         <span className="text-sm font-medium text-white">Vale Alimentação</span>
         {snapshot.nextRecharge && (
-          <span className="text-xs text-muted">
+          <span className="text-xs text-muted text-right">
             próxima recarga {formatDate(snapshot.nextRecharge)} · {snapshot.diasRestantes} dia{snapshot.diasRestantes === 1 ? "" : "s"}
           </span>
         )}
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 gap-3">
         {stats.map((s) => (
           <div key={s.label} className="rounded-lg border border-border bg-surface-2/40 p-3">
             <div className="text-xs text-muted mb-1">{s.label}</div>

@@ -78,7 +78,7 @@ export default function ContasAPagarView() {
 
   if (loading) {
     return (
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+      <div>
         <SkeletonBlock className="h-8 w-48 mb-6" />
         <SkeletonBlock className="h-56" />
       </div>
@@ -86,7 +86,7 @@ export default function ContasAPagarView() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+    <div>
       <header className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Contas a Pagar</h1>
         <button onClick={() => setShowForm((v) => !v)} className="rounded-lg bg-positive hover:bg-positive-soft px-4 py-2 text-sm font-medium text-slate-950 transition-colors cursor-pointer">

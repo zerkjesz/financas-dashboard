@@ -2,7 +2,7 @@ export default function IntelligenceSummary({ intelligence }) {
   if (!intelligence) return null;
 
   return (
-    <div className="rounded-xl border border-border bg-gradient-to-br from-surface to-surface-2 p-4 mb-6">
+    <div className="rounded-xl border border-border bg-gradient-to-br from-surface to-surface-2 p-4 h-full">
       <div className="flex items-center gap-2 mb-3">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="text-positive">
           <path d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />

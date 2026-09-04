@@ -31,18 +31,21 @@ export default function UpcomingObligations({ items }) {
   if (items.length === 0) return null;
 
   return (
-    <div className="rounded-xl border border-border bg-surface p-4 mb-6">
+    <div className="rounded-xl border border-border bg-surface p-4 h-full flex flex-col">
       <div className="text-sm font-medium text-white mb-2">Próximas obrigações</div>
       <div className="divide-y divide-border">
         {items.map((item, i) => (
-          <div key={i} className="flex items-center gap-3 py-2.5 text-sm">
-            <span className={`shrink-0 ${item.amount >= 0 ? "text-positive" : "text-muted"}`}>{KIND_ICON[item.kind]}</span>
-            <span className="text-slate-200 truncate flex-1">{item.name}</span>
-            <span className="text-muted text-xs shrink-0 hidden sm:inline">{formatDate(item.date)}</span>
-            <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded ${STATUS_TONE[item.status] || STATUS_TONE.pendente}`}>{item.status}</span>
-            <span className={`tabular font-medium w-24 text-right shrink-0 ${item.amount >= 0 ? "text-positive" : "text-white"}`}>
-              {item.amount >= 0 ? "+" : "-"}{formatMoney(Math.abs(item.amount))}
-            </span>
+          <div key={i} className="py-2.5 text-sm">
+            <div className="flex items-center gap-2 mb-1">
+              <span className={`shrink-0 ${item.amount >= 0 ? "text-positive" : "text-muted"}`}>{KIND_ICON[item.kind]}</span>
+              <span className="text-slate-200 truncate min-w-0">{item.name}</span>
+            </div>
+            <div className="flex items-center justify-between pl-[22px] gap-2">
+              <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded ${STATUS_TONE[item.status] || STATUS_TONE.pendente}`}>{item.status}</span>
+              <span className={`tabular font-medium text-right shrink-0 ${item.amount >= 0 ? "text-positive" : "text-white"}`}>
+                {item.amount >= 0 ? "+" : "-"}{formatMoney(Math.abs(item.amount))}
+              </span>
+            </div>
           </div>
         ))}
       </div>

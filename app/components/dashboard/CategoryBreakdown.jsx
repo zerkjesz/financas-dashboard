@@ -20,7 +20,7 @@ export default function CategoryBreakdown({ entries }) {
   if (breakdown.length === 0) return null;
 
   return (
-    <div className="rounded-xl border border-border bg-surface p-4 mb-6">
+    <div className="rounded-xl border border-border bg-surface p-4 h-full">
       <div className="text-sm font-medium text-white mb-4">Gastos por categoria</div>
       <div className="space-y-3">
         {breakdown.map(([category, value]) => {

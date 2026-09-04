@@ -50,7 +50,7 @@ export default function MetasView() {
 
   if (loading) {
     return (
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+      <div>
         <SkeletonBlock className="h-8 w-32 mb-6" />
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <SkeletonBlock className="h-40" />
@@ -61,7 +61,7 @@ export default function MetasView() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+    <div>
       <header className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Metas</h1>
         <button onClick={() => setShowForm((v) => !v)} className="rounded-lg bg-positive hover:bg-positive-soft px-4 py-2 text-sm font-medium text-slate-950 transition-colors cursor-pointer">

@@ -19,7 +19,7 @@ export default function IndicadoresView() {
 
   if (loading || !data) {
     return (
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+      <div>
         <SkeletonBlock className="h-8 w-40 mb-6" />
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
           {Array.from({ length: 8 }).map((_, i) => (
@@ -34,7 +34,7 @@ export default function IndicadoresView() {
   const maxMonth = Math.max(1, ...data.comprometimentoProximosMeses.map((m) => m.total));
 
   return (
-    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+    <div>
       <h1 className="text-2xl font-semibold tracking-tight mb-6">Indicadores</h1>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
