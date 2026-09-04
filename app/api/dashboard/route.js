@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { listAccountsWithBalances } from "@/lib/accounts";
 import { listCardsWithLimits } from "@/lib/cards";
 import { getOrCreateBill } from "@/lib/cardBillCalculator";
+import { getCardCycleForDate } from "@/lib/cardCycle";
 import { buildFinancialSummary } from "@/lib/intelligence";
 import { buildVaSnapshot } from "@/lib/vaPanel";
 import { listUpcomingObligations } from "@/lib/upcomingObligations";
@@ -29,9 +30,14 @@ export async function GET() {
     buildAlerts({ projection30 }),
   ]);
 
-  const currentCycle = new Date().toISOString().slice(0, 7);
+  // Fase 4.0: ciclo real de CADA cartão (closingDay-aware) — antes era um "mês
+  // calendário de hoje" único e compartilhado, que ignoraria closingDay se ele
+  // existisse. Idêntico ao valor antigo enquanto closingDay continuar null.
   const cards = await Promise.all(
-    cardsBase.map(async (card) => ({ ...card, currentBill: await getOrCreateBill(card.id, currentCycle) }))
+    cardsBase.map(async (card) => {
+      const currentCycle = getCardCycleForDate(card, new Date());
+      return { ...card, currentBill: await getOrCreateBill(card.id, currentCycle) };
+    })
   );
 
   const entries = [

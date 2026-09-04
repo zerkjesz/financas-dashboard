@@ -4,6 +4,7 @@ import { listPurchasesWithProgress } from "@/lib/installments";
 import { generateInstallmentSchedule } from "@/lib/installments";
 import { money, divideMoney, roundMoney, serializeMoney, deepSerializeMoney } from "@/lib/money";
 import { resolveConfidence, isValidConfidence } from "@/lib/dataConfidence";
+import { getCardCycleForDate } from "@/lib/cardCycle";
 
 export async function GET() {
   const purchases = await listPurchasesWithProgress();
@@ -25,6 +26,17 @@ export async function POST(request) {
   // (valor nominal da parcela, exibido antes de generateInstallmentSchedule ajustar
   // a última parcela por subtração) evita o ruído de ponto flutuante do JS puro.
   const installmentValue = serializeMoney(roundMoney(divideMoney(money(totalAmount), installmentCount)));
+
+  // Fase 4.0: default de firstInstallmentMonth é o ciclo real DESTE cartão pra
+  // "agora" (closingDay-aware), não mais um mês calendário genérico — idêntico ao
+  // valor antigo enquanto closingDay continuar null.
+  let resolvedFirstInstallmentMonth = firstInstallmentMonth;
+  if (!resolvedFirstInstallmentMonth) {
+    const card = await prisma.card.findUnique({ where: { id: cardId } });
+    if (!card) return NextResponse.json({ error: "cartão não encontrado" }, { status: 404 });
+    resolvedFirstInstallmentMonth = getCardCycleForDate(card, new Date());
+  }
+
   const purchase = await prisma.purchase.create({
     data: {
       description,
@@ -33,7 +45,7 @@ export async function POST(request) {
       installmentValue,
       category: category || "Outros",
       cardId,
-      firstInstallmentMonth: firstInstallmentMonth || new Date().toISOString().slice(0, 7),
+      firstInstallmentMonth: resolvedFirstInstallmentMonth,
       startingInstallmentNumber: startingInstallmentNumber || 1,
       source: "manual",
       confidence: resolveConfidence(confidence),

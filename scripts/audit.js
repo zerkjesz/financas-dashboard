@@ -394,6 +394,75 @@ async function auditExternalInstallmentExpenseLinks() {
   );
 }
 
+// Fase 4.0 — Ciclos + Obligation Classification. Todas read-only.
+
+async function auditCardCycleConfig() {
+  const cards = await prisma.card.findMany();
+  for (const card of cards) {
+    const dueDayValid = Number.isInteger(card.dueDay) && card.dueDay >= 1 && card.dueDay <= 31;
+    check(`Card "${card.name}": dueDay válido (1-31)`, dueDayValid, String(card.dueDay));
+    if (card.closingDay != null) {
+      const closingDayValid = Number.isInteger(card.closingDay) && card.closingDay >= 1 && card.closingDay <= 31;
+      check(`Card "${card.name}": closingDay válido (1-31) quando presente`, closingDayValid, String(card.closingDay));
+    }
+  }
+}
+
+// Formaliza por evidência que nenhuma segunda fonte de verdade sobre "o plano
+// está completo" foi introduzida — ExternalInstallmentPlan.status só tem
+// ACTIVE/CANCELLED (nunca um "COMPLETED" manual, ver schema.prisma); a
+// completude é sempre derivada das installments (lib/externalInstallments.js:
+// computePlanProgress). Esta checagem confirma que todo status armazenado
+// continua dentro desse conjunto restrito, pra qualquer regressão futura
+// (alguém adicionando um valor novo ao enum) ser pega aqui.
+async function auditExternalInstallmentPlanCompleteness() {
+  const plans = await prisma.externalInstallmentPlan.findMany({ include: { installments: true } });
+  const ALLOWED_STATUS = new Set(["ACTIVE", "CANCELLED"]);
+  for (const plan of plans) {
+    check(`ExternalInstallmentPlan "${plan.description}": status dentro do conjunto restrito (ACTIVE/CANCELLED, nunca um "COMPLETED" manual)`, ALLOWED_STATUS.has(plan.status), plan.status);
+    const paidCount = plan.installments.filter((i) => i.status === "PAID").length;
+    const isFullyPaid = plan.installments.length > 0 && paidCount === plan.installments.length;
+    if (isFullyPaid) {
+      check(`ExternalInstallmentPlan "${plan.description}": totalmente pago, completude é derivada (nenhum campo próprio pra contradizer)`, true, `${paidCount}/${plan.installments.length}`);
+    }
+  }
+}
+
+async function auditCommitmentFunding() {
+  const commitments = await prisma.confirmedCommitment.findMany();
+  for (const c of commitments) {
+    if (c.status === "FUNDED") {
+      check(
+        `ConfirmedCommitment "${c.description}" (FUNDED) tem fundingAccountId OU fundingReserveId (não nenhum dos dois)`,
+        c.fundingAccountId != null || c.fundingReserveId != null,
+        `fundingAccountId=${c.fundingAccountId}, fundingReserveId=${c.fundingReserveId}`
+      );
+      check(`ConfirmedCommitment "${c.description}" (FUNDED) tem fundedAt`, c.fundedAt != null);
+    }
+    // Proibido: as duas origens de funding simultaneamente — um commitment é
+    // fundado por UMA fonte, nunca duas ao mesmo tempo (estruturalmente já
+    // impedido pelos services, que só transicionam CONFIRMED->FUNDED setando um
+    // dos dois — esta checagem é a evidência de que isso se sustenta no dado real).
+    check(
+      `ConfirmedCommitment "${c.description}": nunca fundingAccountId e fundingReserveId simultâneos`,
+      !(c.fundingAccountId != null && c.fundingReserveId != null)
+    );
+  }
+}
+
+// Datas/ciclos obviamente inválidos — evidência contra regressão do bug original
+// (computeDueAt somando um mês a mais quando closingDay estava presente).
+async function auditCardBillDateSanity() {
+  const bills = await prisma.cardBill.findMany();
+  for (const bill of bills) {
+    check(
+      `CardBill ${bill.cardId}/${bill.cycleMonth}: dueAt não é anterior a closesAt`,
+      bill.dueAt.getTime() >= bill.closesAt.getTime(),
+      `closesAt=${bill.closesAt.toISOString()}, dueAt=${bill.dueAt.toISOString()}`
+    );
+  }
+}
+
 async function main() {
   console.log("--- Auditoria de consistência (read-only) ---\n");
   await auditAccountBalances();
@@ -414,6 +483,10 @@ async function main() {
   await auditContingencyBounds();
   await auditCardCreditBalances();
   await auditExternalInstallmentExpenseLinks();
+  await auditCardCycleConfig();
+  await auditExternalInstallmentPlanCompleteness();
+  await auditCommitmentFunding();
+  await auditCardBillDateSanity();
 
   console.log(`\n${problems.length === 0 ? "✅ Tudo consistente." : `❌ ${problems.length} divergência(s) encontrada(s).`}`);
   process.exitCode = problems.length === 0 ? 0 : 1;

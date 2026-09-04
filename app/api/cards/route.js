@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { listCardsWithLimits } from "@/lib/cards";
 import { getOrCreateBill } from "@/lib/cardBillCalculator";
+import { getCardCycleForDate } from "@/lib/cardCycle";
+import { addMonthKey } from "@/lib/formatMoney";
 import { deepSerializeMoney } from "@/lib/money";
 import { resolveConfidence, isValidConfidence } from "@/lib/dataConfidence";
 
@@ -9,10 +11,11 @@ export async function GET() {
   const cards = await listCardsWithLimits();
   const withBills = await Promise.all(
     cards.map(async (card) => {
-      const currentCycle = new Date().toISOString().slice(0, 7);
-      const nextCycle = new Date();
-      nextCycle.setUTCMonth(nextCycle.getUTCMonth() + 1);
-      const nextCycleKey = nextCycle.toISOString().slice(0, 7);
+      // Fase 4.0: ciclo real DESTE cartão (closingDay-aware), não mais um "mês
+      // calendário de hoje" genérico — idêntico ao valor antigo enquanto
+      // closingDay continuar null (nenhuma mudança pro cartão real hoje).
+      const currentCycle = getCardCycleForDate(card, new Date());
+      const nextCycleKey = addMonthKey(currentCycle, 1);
       const [currentBill, nextBill] = await Promise.all([
         getOrCreateBill(card.id, currentCycle),
         getOrCreateBill(card.id, nextCycleKey),
