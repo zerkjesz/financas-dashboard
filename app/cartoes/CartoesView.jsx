@@ -6,10 +6,11 @@ import { SkeletonBlock } from "../components/Skeleton.jsx";
 
 const STATUS_STYLE = {
   paid: "bg-positive/15 text-positive",
+  partially_paid: "bg-info/15 text-info",
   closed: "bg-warning/15 text-warning",
   open: "bg-surface-2 text-slate-300",
 };
-const STATUS_LABEL = { paid: "paga", closed: "fechada", open: "aberta" };
+const STATUS_LABEL = { paid: "paga", partially_paid: "paga parcial", closed: "fechada", open: "aberta" };
 
 export default function CartoesView() {
   const [cards, setCards] = useState([]);

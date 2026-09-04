@@ -4,6 +4,7 @@ const STATUS_TONE = {
   pendente: "bg-surface-2 text-slate-300",
   atrasada: "bg-negative/15 text-negative",
   paga: "bg-positive/15 text-positive",
+  parcial: "bg-warning/15 text-warning",
   prevista: "bg-info/15 text-info",
 };
 

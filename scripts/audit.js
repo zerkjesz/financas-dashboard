@@ -33,7 +33,7 @@ async function auditAccountBalances() {
 }
 
 async function auditCardBills() {
-  const openBills = await prisma.cardBill.findMany({ where: { status: "open" } });
+  const openBills = await prisma.cardBill.findMany({ where: { status: { in: ["open", "partially_paid"] } } });
   for (const bill of openBills) {
     const before = bill.totalAmount;
     const recomputed = await getOrCreateBill(bill.cardId, bill.cycleMonth);
@@ -43,6 +43,44 @@ async function auditCardBills() {
       `armazenado R$ ${before.toFixed(2)}, recomputado R$ ${recomputed.totalAmount.toFixed(2)}`
     );
   }
+}
+
+// Status derivado tem que bater com paidAmount vs totalAmount — pega qualquer fatura
+// que ficou "paid" com pagamento parcial (bug corrigido na Fase 1, checa se sobrou
+// dado antigo pra reconciliar) ou "partially_paid"/"open"/"closed" com paidAmount que
+// já devia ter fechado como "paid".
+async function auditCardBillStatus() {
+  const bills = await prisma.cardBill.findMany();
+  for (const bill of bills) {
+    const paid = bill.paidAmount || 0;
+    const expectedStatus =
+      paid >= bill.totalAmount - 0.01 && paid > 0
+        ? "paid"
+        : paid > 0
+          ? "partially_paid"
+          : bill.status === "open" || bill.status === "closed"
+            ? bill.status
+            : null; // paidAmount 0 mas status "paid"/"partially_paid" também é inconsistente
+    check(
+      `CardBill ${bill.cardId}/${bill.cycleMonth} status bate com paidAmount`,
+      expectedStatus === null ? bill.status !== "paid" && bill.status !== "partially_paid" : bill.status === expectedStatus,
+      `status=${bill.status}, paidAmount=${paid.toFixed(2)}, totalAmount=${bill.totalAmount.toFixed(2)}`
+    );
+  }
+}
+
+// Antecipação sem fromAccountId é o bug P0-1 da auditoria (dinheiro contado duas
+// vezes) — depois da Fase 1, toda antecipação NOVA sempre tem fromAccountId; esta
+// checagem existe pra pegar histórico ainda não reconciliado (Fase 4).
+async function auditAnticipations() {
+  const orphanAnticipations = await prisma.transfer.count({
+    where: { kind: "installment_anticipation", fromAccountId: null },
+  });
+  check(
+    "Nenhuma antecipação de fatura sem conta de origem (fromAccountId)",
+    orphanAnticipations === 0,
+    `${orphanAnticipations} encontrada(s) — reconciliação histórica pendente (Fase 4 da auditoria)`
+  );
 }
 
 async function auditMigrationSums() {
@@ -84,6 +122,8 @@ async function main() {
   console.log("--- Auditoria de consistência ---\n");
   await auditAccountBalances();
   await auditCardBills();
+  await auditCardBillStatus();
+  await auditAnticipations();
   await auditMigrationSums();
   await auditOrphans();
 
