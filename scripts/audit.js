@@ -23,6 +23,9 @@ import { buildVaSnapshot } from "../lib/vaPanel.js";
 // Fase 3.3 — getReserveBalance/getCardCreditBalance são puramente leitura (só
 // agregam ReserveMovement/CardCreditMovement já existentes, nunca escrevem).
 import { getReserveBalance } from "../lib/reserves.js";
+// Fase 4.1 — getObligationsBreakdown é puramente leitura (só classifica dado já
+// existente, nunca escreve — mesma garantia de computeExpectedCardBillTotal acima).
+import { getObligationsBreakdown } from "../lib/freeMoney.js";
 import { getCardCreditBalance } from "../lib/cardCredit.js";
 // Decimal-first (Fase 3.1, Etapa 13): todo campo monetário lido do Prisma agora é
 // Decimal (Prisma.Decimal/decimal.js) — nunca `+`/`-`/`Math.abs()` nativos nele (viram
@@ -497,6 +500,47 @@ async function auditRecurringIncomeOccurrences() {
   check("Nenhuma ocorrência (recurringRuleId + recurringOccurrenceDate) duplicada", duplicated.length === 0, JSON.stringify(duplicated));
 }
 
+// Fase 4.1 — Financial Engine V2. Read-only.
+
+// protectedMoney por conta não pode exceder o saldo real dessa conta — não dá
+// pra "proteger" mais dinheiro do que a conta realmente tem.
+async function auditProtectedMoneyWithinAccountBalance() {
+  const reserves = await prisma.reserve.findMany({ where: { isActive: true } });
+  const byAccount = new Map();
+  for (const reserve of reserves) {
+    const balance = await getReserveBalance(reserve.id);
+    byAccount.set(reserve.accountId, addMoney(byAccount.get(reserve.accountId) || money(0), balance));
+  }
+  for (const [accountId, protectedSum] of byAccount) {
+    const accountBalance = await computeAccountBalance(accountId);
+    check(
+      `Soma das Reserve ativas da conta ${accountId} não excede o saldo real da conta`,
+      protectedSum.lte(accountBalance),
+      `protegido=${protectedSum.toFixed(2)}, saldo=${accountBalance.toFixed(2)}`
+    );
+  }
+}
+
+// Nenhuma obrigação (CardBill/Bill/ExternalInstallment/ConfirmedCommitment)
+// pode ser classificada em mais de uma classe simultaneamente — o classificador
+// já garante isso por construção (lib/freeMoney.js:classifyAllObligations só
+// empurra pra UM bucket), mas confirmado aqui por evidência de dado real, não
+// só por confiar no código.
+async function auditObligationClassesMutuallyExclusive() {
+  const now = new Date();
+  const buckets = await getObligationsBreakdown({ now, nextIncomeDate: now });
+  const seen = new Map();
+  const duplicated = [];
+  for (const cls of Object.keys(buckets)) {
+    for (const item of buckets[cls].items) {
+      const key = `${item.type}:${item.id}`;
+      if (seen.has(key)) duplicated.push(key);
+      seen.set(key, cls);
+    }
+  }
+  check("Nenhuma obrigação classificada em mais de uma classe simultaneamente (incurred/currentHorizon/future)", duplicated.length === 0, JSON.stringify(duplicated));
+}
+
 async function main() {
   console.log("--- Auditoria de consistência (read-only) ---\n");
   await auditAccountBalances();
@@ -522,6 +566,8 @@ async function main() {
   await auditCommitmentFunding();
   await auditCardBillDateSanity();
   await auditRecurringIncomeOccurrences();
+  await auditProtectedMoneyWithinAccountBalance();
+  await auditObligationClassesMutuallyExclusive();
 
   console.log(`\n${problems.length === 0 ? "✅ Tudo consistente." : `❌ ${problems.length} divergência(s) encontrada(s).`}`);
   process.exitCode = problems.length === 0 ? 0 : 1;
