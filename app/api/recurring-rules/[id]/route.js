@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { deepSerializeMoney } from "@/lib/money";
 
 export async function PATCH(request, { params }) {
   const { id } = await params;
@@ -12,7 +13,7 @@ export async function PATCH(request, { params }) {
   if (typeof body.category === "string" || body.category === null) data.category = body.category;
 
   const rule = await prisma.recurringRule.update({ where: { id }, data });
-  return NextResponse.json(rule);
+  return NextResponse.json(deepSerializeMoney(rule));
 }
 
 export async function DELETE(_request, { params }) {

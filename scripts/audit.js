@@ -20,6 +20,11 @@ import { PrismaClient } from "@prisma/client";
 import { computeExpectedCardBillTotal } from "../lib/cardBillCalculator.js";
 import { computeAccountBalance } from "../lib/accounts.js";
 import { buildVaSnapshot } from "../lib/vaPanel.js";
+// Decimal-first (Fase 3.1, Etapa 13): todo campo monetário lido do Prisma agora é
+// Decimal (Prisma.Decimal/decimal.js) — nunca `+`/`-`/`Math.abs()` nativos nele (viram
+// NaN/concatenação de string silenciosa, não um erro). Este script continua 100%
+// leitura — só troca a aritmética por lib/money.js.
+import { money, addMoney, subtractMoney } from "../lib/money.js";
 
 const prisma = new PrismaClient();
 const problems = [];
@@ -33,21 +38,26 @@ function check(label, ok, detail) {
 async function rawAccountBalance(accountId) {
   const anchor = await prisma.balanceAdjustment.findFirst({ where: { accountId }, orderBy: { occurredAt: "desc" } });
   const since = anchor?.occurredAt ?? new Date(0);
-  const base = anchor?.newBalance ?? 0;
+  const base = money(anchor?.newBalance);
   const [inc, exp, tOut, tIn] = await Promise.all([
     prisma.income.aggregate({ where: { accountId, occurredAt: { gt: since } }, _sum: { amount: true } }),
     prisma.expense.aggregate({ where: { accountId, occurredAt: { gt: since } }, _sum: { amount: true } }),
     prisma.transfer.aggregate({ where: { fromAccountId: accountId, occurredAt: { gt: since } }, _sum: { amount: true } }),
     prisma.transfer.aggregate({ where: { toAccountId: accountId, occurredAt: { gt: since } }, _sum: { amount: true } }),
   ]);
-  return base + (inc._sum.amount || 0) - (exp._sum.amount || 0) + (tIn._sum.amount || 0) - (tOut._sum.amount || 0);
+  let balance = base;
+  balance = addMoney(balance, inc._sum.amount);
+  balance = subtractMoney(balance, exp._sum.amount);
+  balance = addMoney(balance, tIn._sum.amount);
+  balance = subtractMoney(balance, tOut._sum.amount);
+  return balance;
 }
 
 async function auditAccountBalances() {
   const accounts = await prisma.account.findMany();
   for (const account of accounts) {
     const balance = await rawAccountBalance(account.id);
-    check(`Saldo de "${account.name}" é finito e >= -0.01`, Number.isFinite(balance) && balance >= -0.01, `R$ ${balance.toFixed(2)}`);
+    check(`Saldo de "${account.name}" é finito e >= -0.01`, balance.isFinite() && balance.gte(-0.01), `R$ ${balance.toFixed(2)}`);
   }
 }
 
@@ -61,7 +71,7 @@ async function auditNoVirtualCreditInBalance() {
     const [real, raw] = await Promise.all([computeAccountBalance(account.id), rawAccountBalance(account.id)]);
     check(
       `Saldo real de "${account.name}" não inclui receita recorrente virtual`,
-      Math.abs(real - raw) < 0.01,
+      subtractMoney(real, raw).abs().lt(0.01),
       `computeAccountBalance=R$ ${real.toFixed(2)}, recompute independente=R$ ${raw.toFixed(2)}`
     );
   }
@@ -80,7 +90,7 @@ async function auditVaSnapshotMatchesAccountBalance() {
   const [snapshot, realBalance] = await Promise.all([buildVaSnapshot(), computeAccountBalance(account.id)]);
   check(
     "Saldo do painel de VA (buildVaSnapshot) bate com o saldo real da Account",
-    snapshot != null && Math.abs(snapshot.balance - realBalance) < 0.01,
+    snapshot != null && subtractMoney(snapshot.balance, realBalance).abs().lt(0.01),
     `painel=R$ ${snapshot?.balance?.toFixed(2)}, Account real=R$ ${realBalance.toFixed(2)}`
   );
 }
@@ -101,7 +111,7 @@ async function auditCardBills() {
     const expected = await computeExpectedCardBillTotal(card, bill.cycleMonth);
     check(
       `CardBill ${bill.cycleMonth} bate com o recomputo (read-only)`,
-      Math.abs(bill.totalAmount - expected) < 0.01,
+      subtractMoney(bill.totalAmount, expected).abs().lt(0.01),
       `armazenado R$ ${bill.totalAmount.toFixed(2)}, esperado R$ ${expected.toFixed(2)}`
     );
   }
@@ -114,11 +124,13 @@ async function auditCardBills() {
 async function auditCardBillStatus() {
   const bills = await prisma.cardBill.findMany();
   for (const bill of bills) {
-    const paid = bill.paidAmount || 0;
+    const paid = money(bill.paidAmount);
+    const total = money(bill.totalAmount);
+    const isPaidInFull = paid.gte(subtractMoney(total, 0.01)) && paid.gt(0);
     const expectedStatus =
-      paid >= bill.totalAmount - 0.01 && paid > 0
+      isPaidInFull
         ? "paid"
-        : paid > 0
+        : paid.gt(0)
           ? "partially_paid"
           : bill.status === "open" || bill.status === "closed"
             ? bill.status
@@ -126,7 +138,7 @@ async function auditCardBillStatus() {
     check(
       `CardBill ${bill.cardId}/${bill.cycleMonth} status bate com paidAmount`,
       expectedStatus === null ? bill.status !== "paid" && bill.status !== "partially_paid" : bill.status === expectedStatus,
-      `status=${bill.status}, paidAmount=${paid.toFixed(2)}, totalAmount=${bill.totalAmount.toFixed(2)}`
+      `status=${bill.status}, paidAmount=${paid.toFixed(2)}, totalAmount=${total.toFixed(2)}`
     );
   }
 }
@@ -147,8 +159,11 @@ async function auditAnticipations() {
 
 async function auditMigrationSums() {
   const legacyRows = await prisma.legacyTransaction.findMany();
+  // LegacyTransaction.amount é Float de propósito (tabela congelada, fora do escopo
+  // dos 17 campos convertidos — ver docs/phase3-money-audit.md) — soma via money.js
+  // do mesmo jeito, só pra comparar com o lado Decimal sem gambiarra de tipo.
   const legacyByType = legacyRows.reduce((acc, r) => {
-    acc[r.type] = (acc[r.type] || 0) + r.amount;
+    acc[r.type] = addMoney(acc[r.type] || 0, r.amount);
     return acc;
   }, {});
   const [incomeSum, expenseSum] = await Promise.all([
@@ -157,11 +172,11 @@ async function auditMigrationSums() {
   ]);
   check(
     "Soma de Income migrado bate com transaction_legacy",
-    Math.abs((legacyByType.income || 0) - (incomeSum._sum.amount || 0)) < 0.01
+    subtractMoney(legacyByType.income || 0, incomeSum._sum.amount || 0).abs().lt(0.01)
   );
   check(
     "Soma de Expense migrado bate com transaction_legacy",
-    Math.abs((legacyByType.expense || 0) - (expenseSum._sum.amount || 0)) < 0.01
+    subtractMoney(legacyByType.expense || 0, expenseSum._sum.amount || 0).abs().lt(0.01)
   );
 }
 

@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { deepSerializeMoney } from "@/lib/money";
 
 export async function GET() {
   const rules = await prisma.recurringRule.findMany({ orderBy: { dayOfMonth: "asc" } });
-  return NextResponse.json(rules);
+  return NextResponse.json(deepSerializeMoney(rules));
 }
 
 export async function POST(request) {
@@ -24,5 +25,5 @@ export async function POST(request) {
       category: category || null,
     },
   });
-  return NextResponse.json(rule, { status: 201 });
+  return NextResponse.json(deepSerializeMoney(rule), { status: 201 });
 }

@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { listBills, createBill } from "@/lib/bills";
+import { deepSerializeMoney } from "@/lib/money";
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const status = searchParams.get("status");
   const bills = await listBills({ status: status ? status.split(",") : undefined });
-  return NextResponse.json(bills);
+  return NextResponse.json(deepSerializeMoney(bills));
 }
 
 export async function POST(request) {
@@ -25,5 +26,5 @@ export async function POST(request) {
     notes,
     source: "manual",
   });
-  return NextResponse.json(bill, { status: 201 });
+  return NextResponse.json(deepSerializeMoney(bill), { status: 201 });
 }

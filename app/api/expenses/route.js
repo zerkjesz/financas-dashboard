@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { deepSerializeMoney } from "@/lib/money";
 
 export async function GET() {
   const expenses = await prisma.expense.findMany({
     include: { account: true, card: true },
     orderBy: { occurredAt: "desc" },
   });
-  return NextResponse.json(expenses);
+  return NextResponse.json(deepSerializeMoney(expenses));
 }
 
 export async function POST(request) {
@@ -29,5 +30,5 @@ export async function POST(request) {
       occurredAt: occurredAt ? new Date(occurredAt) : undefined,
     },
   });
-  return NextResponse.json(expense, { status: 201 });
+  return NextResponse.json(deepSerializeMoney(expense), { status: 201 });
 }

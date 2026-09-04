@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { maxMoney, subtractMoney, money, ZERO, serializeMoney, deepSerializeMoney } from "@/lib/money";
 
 export async function POST(request, { params }) {
   const { id } = await params;
@@ -13,16 +14,19 @@ export async function POST(request, { params }) {
   const card = await prisma.card.findUnique({ where: { id } });
   if (!card) return NextResponse.json({ error: "cartão não encontrado" }, { status: 404 });
 
-  const totalLimit = newTotalLimit ?? card.totalLimit;
+  // card.totalLimit já vem como Decimal do Prisma — nunca usar `-` nativo nele
+  // (Fase 3.1). newTotalLimit é number cru vindo do body (fronteira de entrada).
+  const totalLimit = newTotalLimit != null ? money(newTotalLimit) : card.totalLimit;
+  const newUsedLimit = maxMoney(ZERO, subtractMoney(totalLimit, reportedAvailable));
   const limitUpdate = await prisma.cardLimitUpdate.create({
     data: {
       cardId: id,
       newTotalLimit: newTotalLimit ?? null,
-      newUsedLimit: Math.max(0, totalLimit - reportedAvailable),
+      newUsedLimit: serializeMoney(newUsedLimit),
       reportedAvailable,
       note: note || null,
       source: "manual",
     },
   });
-  return NextResponse.json(limitUpdate, { status: 201 });
+  return NextResponse.json(deepSerializeMoney(limitUpdate), { status: 201 });
 }

@@ -16,6 +16,13 @@
 // ============================================================================
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
+// Decimal-first (Fase 3.1, Etapa 13): os 17 campos abaixo já são Decimal(12,2) no
+// Postgres desde a migration desta fase — `<`/`>`/`+`/`-` nativos neles quebram
+// silenciosamente (viram NaN/comparação de objeto, não um erro visível). Este
+// script continua útil como checagem de regressão (agora deve sempre dar "não
+// mudaria nada", já que o próprio tipo da coluna garante 2 casas) — só troca a
+// aritmética por lib/money.js.
+import { money, addMoney, subtractMoney } from "../lib/money.js";
 
 const prisma = new PrismaClient();
 
@@ -45,48 +52,48 @@ const FIELDS = [
 // margem confortável entre as duas escalas.
 const EPSILON = 1e-6;
 function round2(v) {
-  return Math.round(v * 100) / 100;
+  return money(v).toDecimalPlaces(2, 4 /* ROUND_HALF_UP — mesmo valor numérico que D.ROUND_HALF_UP em lib/money.js */);
 }
 
 async function auditField({ accessor, field, label, nullable }) {
   const totalRows = await prisma[accessor].count();
   const rows = await prisma[accessor].findMany({ select: { id: true, [field]: true } });
-  const values = rows.filter((r) => r[field] != null).map((r) => ({ id: r.id, value: r[field] }));
+  const values = rows.filter((r) => r[field] != null).map((r) => ({ id: r.id, value: money(r[field]) }));
 
   if (values.length === 0) {
     return {
       label, nullable, totalRows, nonNullCount: 0,
       min: null, max: null, negativeCount: 0, moreThanTwoDecimalsCount: 0,
-      wouldChangeCount: 0, maxAbsDiff: 0, sumBefore: 0, sumAfter: 0, diffTotal: 0, examples: [],
+      wouldChangeCount: 0, maxAbsDiff: 0, sumBefore: money(0), sumAfter: money(0), diffTotal: money(0), examples: [],
     };
   }
 
-  let min = Infinity, max = -Infinity, negativeCount = 0, moreThanTwoDecimalsCount = 0;
-  let sumBefore = 0, sumAfter = 0;
+  let min = null, max = null, negativeCount = 0, moreThanTwoDecimalsCount = 0;
+  let sumBefore = money(0), sumAfter = money(0);
   const diffs = [];
 
   for (const { id, value } of values) {
-    if (value < min) min = value;
-    if (value > max) max = value;
-    if (value < 0) negativeCount++;
+    if (min === null || value.lt(min)) min = value;
+    if (max === null || value.gt(max)) max = value;
+    if (value.lt(0)) negativeCount++;
     const rounded = round2(value);
-    const diff = value - rounded;
-    if (Math.abs(diff) > EPSILON) {
+    const diff = subtractMoney(value, rounded);
+    if (diff.abs().gt(EPSILON)) {
       moreThanTwoDecimalsCount++;
       diffs.push({ id, before: value, after: rounded, diff });
     }
-    sumBefore += value;
-    sumAfter += rounded;
+    sumBefore = addMoney(sumBefore, value);
+    sumAfter = addMoney(sumAfter, rounded);
   }
 
-  diffs.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+  diffs.sort((a, b) => (b.diff.abs().minus(a.diff.abs())).toNumber());
 
   return {
     label, nullable, totalRows, nonNullCount: values.length,
     min, max, negativeCount, moreThanTwoDecimalsCount,
     wouldChangeCount: diffs.length,
-    maxAbsDiff: diffs.length > 0 ? Math.abs(diffs[0].diff) : 0,
-    sumBefore, sumAfter, diffTotal: sumBefore - sumAfter,
+    maxAbsDiff: diffs.length > 0 ? diffs[0].diff.abs() : money(0),
+    sumBefore, sumAfter, diffTotal: subtractMoney(sumBefore, sumAfter),
     examples: diffs.slice(0, 5),
   };
 }

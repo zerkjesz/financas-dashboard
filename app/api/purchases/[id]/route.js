@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { deepSerializeMoney } from "@/lib/money";
 
 export async function GET(_request, { params }) {
   const { id } = await params;
@@ -8,7 +9,7 @@ export async function GET(_request, { params }) {
     include: { installments: { orderBy: { number: "asc" } }, card: true },
   });
   if (!purchase) return NextResponse.json({ error: "não encontrada" }, { status: 404 });
-  return NextResponse.json(purchase);
+  return NextResponse.json(deepSerializeMoney(purchase));
 }
 
 export async function DELETE(_request, { params }) {

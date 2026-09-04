@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { addToGoal } from "@/lib/goals";
+import { deepSerializeMoney } from "@/lib/money";
 
 export async function PATCH(request, { params }) {
   const { id } = await params;
@@ -8,7 +9,7 @@ export async function PATCH(request, { params }) {
 
   if (typeof body.addAmount === "number" && body.addAmount !== 0) {
     const goal = await addToGoal(id, body.addAmount);
-    return NextResponse.json(goal);
+    return NextResponse.json(deepSerializeMoney(goal));
   }
 
   const data = {};
@@ -19,7 +20,7 @@ export async function PATCH(request, { params }) {
   if (typeof body.notes === "string" || body.notes === null) data.notes = body.notes;
 
   const goal = await prisma.goal.update({ where: { id }, data });
-  return NextResponse.json(goal);
+  return NextResponse.json(deepSerializeMoney(goal));
 }
 
 export async function DELETE(_request, { params }) {

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { payBill } from "@/lib/cardBillCalculator";
+import { deepSerializeMoney } from "@/lib/money";
 
 export async function POST(request, { params }) {
   const { billId } = await params;
@@ -12,7 +13,7 @@ export async function POST(request, { params }) {
 
   try {
     const result = await payBill(billId, { fromAccountId, amount, description });
-    return NextResponse.json(result, { status: 201 });
+    return NextResponse.json(deepSerializeMoney(result), { status: 201 });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 400 });
   }

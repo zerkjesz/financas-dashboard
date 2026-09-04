@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { deepSerializeMoney } from "@/lib/money";
 
 export async function POST(request, { params }) {
   const { id } = await params;
@@ -13,5 +14,5 @@ export async function POST(request, { params }) {
   const adjustment = await prisma.balanceAdjustment.create({
     data: { accountId: id, newBalance, note: note || null, source: "manual" },
   });
-  return NextResponse.json(adjustment, { status: 201 });
+  return NextResponse.json(deepSerializeMoney(adjustment), { status: 201 });
 }

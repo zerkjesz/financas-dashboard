@@ -3,8 +3,13 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Usada só pelo Prisma Migrate (shadow database, DDL) — nunca pelo runtime da
+  // aplicação (lib/prisma.js usa o driver adapter da Neon direto com DATABASE_URL,
+  // não passa por aqui). Neon/PgBouncer em modo pooled não garante os comandos de
+  // nível de sessão que Migrate precisa (Fase 3.1, Etapa 0 — ver docs/dev-environment.md).
+  directUrl = env("DIRECT_URL")
 }
 
 model Account {
@@ -31,7 +36,7 @@ model Card {
   name       String
   accountId  String?
   account    Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
-  totalLimit Float
+  totalLimit Decimal @db.Decimal(12, 2)
   closingDay Int? // null = desconhecido, editável depois
   dueDay     Int
   createdAt  DateTime @default(now())
@@ -46,7 +51,7 @@ model Card {
 
 model Income {
   id                  String         @id @default(cuid())
-  amount              Float
+  amount              Decimal        @db.Decimal(12, 2)
   description         String
   category            String         @default("Outros")
   accountId           String
@@ -67,7 +72,7 @@ model Income {
 
 model Expense {
   id                  String         @id @default(cuid())
-  amount              Float
+  amount              Decimal        @db.Decimal(12, 2)
   description         String
   category            String         @default("Outros")
   accountId           String?
@@ -94,7 +99,7 @@ model Expense {
 
 model Transfer {
   id            String    @id @default(cuid())
-  amount        Float
+  amount        Decimal   @db.Decimal(12, 2)
   description   String
   fromAccountId String?
   fromAccount   Account?  @relation("TransferFromAccount", fields: [fromAccountId], references: [id], onDelete: SetNull)
@@ -117,7 +122,7 @@ model BalanceAdjustment {
   id         String   @id @default(cuid())
   accountId  String
   account    Account  @relation(fields: [accountId], references: [id])
-  newBalance Float
+  newBalance Decimal @db.Decimal(12, 2)
   note       String?
   source     String   @default("manual") // "telegram" | "manual" | "migration"
   rawMessage String?
@@ -131,9 +136,9 @@ model CardLimitUpdate {
   id                String   @id @default(cuid())
   cardId            String
   card              Card     @relation(fields: [cardId], references: [id])
-  newTotalLimit     Float? // setado só se o limite total também mudou
-  newUsedLimit      Float // valor-âncora
-  reportedAvailable Float? // valor bruto que o usuário informou, mantido pra auditoria
+  newTotalLimit     Decimal? @db.Decimal(12, 2) // setado só se o limite total também mudou
+  newUsedLimit      Decimal  @db.Decimal(12, 2) // valor-âncora
+  reportedAvailable Decimal? @db.Decimal(12, 2) // valor bruto que o usuário informou, mantido pra auditoria
   note              String?
   source            String   @default("manual")
   rawMessage        String?
@@ -146,9 +151,9 @@ model CardLimitUpdate {
 model Purchase {
   id                        String   @id @default(cuid())
   description               String
-  totalAmount               Float
+  totalAmount               Decimal  @db.Decimal(12, 2)
   installmentCount          Int
-  installmentValue          Float
+  installmentValue          Decimal  @db.Decimal(12, 2)
   category                  String   @default("Outros")
   cardId                    String
   card                      Card     @relation(fields: [cardId], references: [id])
@@ -170,7 +175,7 @@ model Installment {
   purchaseId String
   purchase   Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
   number     Int
-  amount     Float
+  amount     Decimal  @db.Decimal(12, 2)
   billMonth  String // "2026-09"
   createdAt  DateTime @default(now())
 
@@ -185,10 +190,10 @@ model CardBill {
   cycleMonth  String // "2026-08"
   closesAt    DateTime
   dueAt       DateTime
-  totalAmount Float     @default(0)
+  totalAmount Decimal   @default(0) @db.Decimal(12, 2)
   status      String    @default("open") // "open" | "closed" | "paid"
   paidAt      DateTime?
-  paidAmount  Float?
+  paidAmount  Decimal?  @db.Decimal(12, 2)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -201,7 +206,7 @@ model RecurringRule {
   id         String   @id @default(cuid())
   name       String // "Vale Alimentação - Recarga", "Aluguel", "Luz", "Internet", "Salário"
   kind       String // "income" | "expense"
-  amount     Float? // null se variável (ex: luz muda todo mês)
+  amount     Decimal? @db.Decimal(12, 2) // null se variável (ex: luz muda todo mês)
   dayOfMonth Int // 1-31
   accountId  String?
   account    Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
@@ -220,7 +225,7 @@ model RecurringRule {
 model Bill {
   id              String         @id @default(cuid())
   description     String
-  amount          Float
+  amount          Decimal        @db.Decimal(12, 2)
   category        String?        @default("Outros")
   accountId       String?
   account         Account?       @relation(fields: [accountId], references: [id], onDelete: SetNull)
@@ -246,8 +251,8 @@ model Bill {
 model Goal {
   id           String    @id @default(cuid())
   name         String
-  targetAmount Float
-  savedAmount  Float     @default(0)
+  targetAmount Decimal   @db.Decimal(12, 2)
+  savedAmount  Decimal   @default(0) @db.Decimal(12, 2)
   targetDate   DateTime?
   notes        String?
   isActive     Boolean   @default(true)

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { listCardsWithLimits } from "@/lib/cards";
 import { getOrCreateBill } from "@/lib/cardBillCalculator";
+import { deepSerializeMoney } from "@/lib/money";
 
 export async function GET() {
   const cards = await listCardsWithLimits();
@@ -18,7 +19,7 @@ export async function GET() {
       return { ...card, currentBill, nextBill };
     })
   );
-  return NextResponse.json(withBills);
+  return NextResponse.json(deepSerializeMoney(withBills));
 }
 
 export async function POST(request) {
@@ -39,5 +40,5 @@ export async function POST(request) {
     });
   }
 
-  return NextResponse.json(card, { status: 201 });
+  return NextResponse.json(deepSerializeMoney(card), { status: 201 });
 }

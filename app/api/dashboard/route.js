@@ -9,6 +9,8 @@ import { listUpcomingObligations } from "@/lib/upcomingObligations";
 import { listBills } from "@/lib/bills";
 import { buildAlerts } from "@/lib/alerts";
 import { buildCashFlowProjection } from "@/lib/cashFlowProjection";
+import { computeUnrestrictedCash } from "@/lib/unrestrictedCash";
+import { sumMoney, ZERO, deepSerializeMoney } from "@/lib/money";
 
 export async function GET() {
   // Saldo/limite de contas e cartões é a parte mais pesada (várias queries por conta/cartão)
@@ -57,10 +59,14 @@ export async function GET() {
     })),
   ].sort((a, b) => new Date(b.occurredAt) - new Date(a.occurredAt));
 
-  const caixaAtual = accounts.filter((a) => a.type === "checking" || a.type === "cash").reduce((s, a) => s + a.balance, 0);
-  const saldoTotal = accounts.reduce((s, a) => s + a.balance, 0);
+  // Fonte central (lib/unrestrictedCash.js) — elimina a reimplementação própria que
+  // existia aqui (achado da auditoria Fase 3.0) e que, com Decimal, estava
+  // funcionalmente quebrada (`+` nativo não soma Decimal). `saldoTotal` é um conceito
+  // diferente (patrimônio total, inclui VA) — soma direta via sumMoney().
+  const caixaAtual = computeUnrestrictedCash(accounts);
+  const saldoTotal = sumMoney(accounts.map((a) => a.balance));
 
-  return NextResponse.json({
+  const payload = {
     accounts,
     cards,
     entries,
@@ -72,9 +78,14 @@ export async function GET() {
     balances: {
       caixaAtual,
       saldoTotal,
-      pix: accounts.find((a) => a.slug === "itau")?.balance || 0,
-      dinheiro: accounts.find((a) => a.slug === "dinheiro")?.balance || 0,
-      va: accounts.find((a) => a.slug === "vale-alimentacao")?.balance || 0,
+      pix: accounts.find((a) => a.slug === "itau")?.balance ?? ZERO,
+      dinheiro: accounts.find((a) => a.slug === "dinheiro")?.balance ?? ZERO,
+      va: accounts.find((a) => a.slug === "vale-alimentacao")?.balance ?? ZERO,
     },
-  });
+  };
+
+  // Fronteira de serialização (Fase 3.1, Etapa 9) — este é o payload mais profundo/
+  // aninhado do app; deepSerializeMoney() converte QUALQUER Prisma.Decimal em number
+  // puro, em qualquer nível, antes do JSON sair. Ver lib/money.js.
+  return NextResponse.json(deepSerializeMoney(payload));
 }

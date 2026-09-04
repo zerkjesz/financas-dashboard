@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { deepSerializeMoney } from "@/lib/money";
 
 export async function PATCH(request, { params }) {
   const { id } = await params;
@@ -12,7 +13,7 @@ export async function PATCH(request, { params }) {
   if (body.accountId === null || typeof body.accountId === "string") data.accountId = body.accountId;
 
   const card = await prisma.card.update({ where: { id }, data });
-  return NextResponse.json(card);
+  return NextResponse.json(deepSerializeMoney(card));
 }
 
 export async function DELETE(_request, { params }) {

@@ -2,10 +2,11 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { listPurchasesWithProgress } from "@/lib/installments";
 import { generateInstallmentSchedule } from "@/lib/installments";
+import { money, divideMoney, roundMoney, serializeMoney, deepSerializeMoney } from "@/lib/money";
 
 export async function GET() {
   const purchases = await listPurchasesWithProgress();
-  return NextResponse.json(purchases);
+  return NextResponse.json(deepSerializeMoney(purchases));
 }
 
 export async function POST(request) {
@@ -16,7 +17,10 @@ export async function POST(request) {
     return NextResponse.json({ error: "description, totalAmount, installmentCount e cardId são obrigatórios" }, { status: 400 });
   }
 
-  const installmentValue = Math.round((totalAmount / installmentCount) * 100) / 100;
+  // Decimal-first na fronteira de entrada (Etapa 8) — mesmo esse cálculo simples
+  // (valor nominal da parcela, exibido antes de generateInstallmentSchedule ajustar
+  // a última parcela por subtração) evita o ruído de ponto flutuante do JS puro.
+  const installmentValue = serializeMoney(roundMoney(divideMoney(money(totalAmount), installmentCount)));
   const purchase = await prisma.purchase.create({
     data: {
       description,
@@ -33,5 +37,5 @@ export async function POST(request) {
   await generateInstallmentSchedule(purchase);
 
   const withInstallments = await prisma.purchase.findUnique({ where: { id: purchase.id }, include: { installments: true } });
-  return NextResponse.json(withInstallments, { status: 201 });
+  return NextResponse.json(deepSerializeMoney(withInstallments), { status: 201 });
 }

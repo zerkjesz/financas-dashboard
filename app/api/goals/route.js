@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { listGoals } from "@/lib/goals";
+import { deepSerializeMoney } from "@/lib/money";
 
 export async function GET() {
   const goals = await listGoals();
-  return NextResponse.json(goals);
+  return NextResponse.json(deepSerializeMoney(goals));
 }
 
 export async function POST(request) {
@@ -18,5 +19,5 @@ export async function POST(request) {
   const goal = await prisma.goal.create({
     data: { name, targetAmount, targetDate: targetDate ? new Date(targetDate) : null, notes: notes || null },
   });
-  return NextResponse.json(goal, { status: 201 });
+  return NextResponse.json(deepSerializeMoney(goal), { status: 201 });
 }

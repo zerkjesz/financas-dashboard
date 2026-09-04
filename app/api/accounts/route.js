@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { listAccountsWithBalances } from "@/lib/accounts";
+import { deepSerializeMoney } from "@/lib/money";
 
 export async function GET() {
   const accounts = await listAccountsWithBalances();
-  return NextResponse.json(accounts);
+  return NextResponse.json(deepSerializeMoney(accounts));
 }
 
 export async function POST(request) {
