@@ -167,6 +167,19 @@ async function run() {
     check("incurredLiabilities: pagamento parcial reduz pra 700 (1200-500)", eq(deltaPartial, 700), serializeMoney(deltaPartial).toString());
     check("CardBill vira partially_paid (não paid) com pagamento parcial", partiallyPaid.status === "partially_paid", partiallyPaid.status);
 
+    // Remove a fatura futura ANTES da quitação total — do jeito que este teste
+    // criou as duas bills (só a atual + uma 9 meses à frente, sem nada
+    // materializado no meio), quitar totalmente a atual deixaria a futura como
+    // a ÚNICA fatura não liquidada do cartão, e ela LEGITIMAMENTE passaria a
+    // ser "a fatura relevante" pela regra de sequência (Fase 4.1.2) — esse é
+    // exatamente o edge case de "lacuna de materialização" documentado em
+    // lib/freeMoney.js:resolveCurrentRelevantCardBillId (na produção não
+    // acontece, porque listBillsForCard materializa meses contíguos; aqui é um
+    // artefato deste teste ter criado só 2 bills com um buraco entre elas).
+    // Removendo-a, testamos limpo o que esta seção realmente quer provar:
+    // "depois de quitar, não sobra incurred nenhum vindo desta fatura".
+    await prisma.cardBill.delete({ where: { id: futureBill.id } });
+
     // Pagamento do restante -> quita totalmente.
     await payBill(currentBill.id, { fromAccountId: cardAccount.id, amount: 700, description: `[${MARK}] quitação` });
     const afterFull = await getIncurredLiabilities({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE });

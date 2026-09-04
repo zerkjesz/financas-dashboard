@@ -25,7 +25,7 @@ import { buildVaSnapshot } from "../lib/vaPanel.js";
 import { getReserveBalance } from "../lib/reserves.js";
 // Fase 4.1 — getObligationsBreakdown é puramente leitura (só classifica dado já
 // existente, nunca escreve — mesma garantia de computeExpectedCardBillTotal acima).
-import { getObligationsBreakdown } from "../lib/freeMoney.js";
+import { getObligationsBreakdown, resolveCurrentRelevantCardBillId } from "../lib/freeMoney.js";
 import { getCardCreditBalance } from "../lib/cardCredit.js";
 // Decimal-first (Fase 3.1, Etapa 13): todo campo monetário lido do Prisma agora é
 // Decimal (Prisma.Decimal/decimal.js) — nunca `+`/`-`/`Math.abs()` nativos nele (viram
@@ -541,6 +541,29 @@ async function auditObligationClassesMutuallyExclusive() {
   check("Nenhuma obrigação classificada em mais de uma classe simultaneamente (incurred/currentHorizon/future)", duplicated.length === 0, JSON.stringify(duplicated));
 }
 
+// Fase 4.1.2 — Card Liability Gate. A seleção "primeira fatura não liquidada"
+// (lib/freeMoney.js:resolveCurrentRelevantCardBillId) não depende de data
+// nenhuma — funciona corretamente mesmo se o calendário/hora de fechamento for
+// impreciso (item 3). Mas ela PRESSUPÕE que a materialização de CardBill é
+// contígua ao redor de "agora" (sem lacuna). Esta checagem é a rede de
+// segurança dessa suposição: sinaliza (não falha o script) se a fatura
+// "relevante" resolvida pra algum cartão estiver anormalmente longe no tempo —
+// evidência de uma possível lacuna de materialização, não uma prova de bug.
+function auditCurrentRelevantCardBillDistance(cardsWithBills, now) {
+  const ANOMALY_THRESHOLD_DAYS = 62; // ~2 ciclos de folga — generoso de propósito, só pra pegar lacuna real.
+  for (const { card, bills } of cardsWithBills) {
+    const currentId = resolveCurrentRelevantCardBillId(bills);
+    if (!currentId) continue; // nenhuma fatura não liquidada — nada a checar.
+    const bill = bills.find((b) => b.id === currentId);
+    const daysFromNow = Math.abs((bill.closesAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+    check(
+      `Card "${card.name}": fatura relevante (${bill.cycleMonth}) está a uma distância razoável de hoje (possível lacuna de materialização, senão)`,
+      daysFromNow <= ANOMALY_THRESHOLD_DAYS,
+      `closesAt=${bill.closesAt.toISOString()}, hoje=${now.toISOString()}, distância=${Math.round(daysFromNow)} dias`
+    );
+  }
+}
+
 async function main() {
   console.log("--- Auditoria de consistência (read-only) ---\n");
   await auditAccountBalances();
@@ -568,6 +591,12 @@ async function main() {
   await auditRecurringIncomeOccurrences();
   await auditProtectedMoneyWithinAccountBalance();
   await auditObligationClassesMutuallyExclusive();
+
+  const cardsForRelevanceCheck = await prisma.card.findMany();
+  const cardsWithBills = await Promise.all(
+    cardsForRelevanceCheck.map(async (card) => ({ card, bills: await prisma.cardBill.findMany({ where: { cardId: card.id } }) }))
+  );
+  auditCurrentRelevantCardBillDistance(cardsWithBills, new Date());
 
   console.log(`\n${problems.length === 0 ? "✅ Tudo consistente." : `❌ ${problems.length} divergência(s) encontrada(s).`}`);
   process.exitCode = problems.length === 0 ? 0 : 1;

@@ -121,24 +121,25 @@ const NEXT_INCOME = d("2026-09-24");
 const NOW = d("2026-09-04");
 
 {
-  // CardBill atual (ciclo já começou) com saldo > 0 = incurred.
+  // Fase 4.1.2: classifyCardBill não decide mais sozinha por data de ciclo —
+  // recebe isCurrentRelevant já resolvido (ver lib/freeMoney.js:
+  // resolveCurrentRelevantCardBillId, testado em scripts/test-card-liability-gate.mjs).
   const currentBill = { totalAmount: money(500), paidAmount: money(0), cycleMonth: "2026-09" };
   check(
-    "CardBill atual (ciclo já iniciado) com saldo > 0 = INCURRED_LIABILITY",
-    classifyCardBill(currentBill, CARD, { now: NOW }) === OBLIGATION_CLASS.INCURRED_LIABILITY
+    "CardBill marcada isCurrentRelevant com saldo > 0 = INCURRED_LIABILITY",
+    classifyCardBill(currentBill, { isCurrentRelevant: true }) === OBLIGATION_CLASS.INCURRED_LIABILITY
   );
 }
 {
-  // CardBill futura (ciclo ainda não começou) = future — não sequestra freeMoney de hoje.
   const futureBill = { totalAmount: money(300), paidAmount: money(0), cycleMonth: "2027-03" };
   check(
-    "CardBill de ciclo futuro (ainda não iniciado) = FUTURE_OBLIGATION",
-    classifyCardBill(futureBill, CARD, { now: NOW }) === OBLIGATION_CLASS.FUTURE_OBLIGATION
+    "CardBill NÃO relevante com saldo > 0 = FUTURE_OBLIGATION",
+    classifyCardBill(futureBill, { isCurrentRelevant: false }) === OBLIGATION_CLASS.FUTURE_OBLIGATION
   );
 }
 {
   const paidBill = { totalAmount: money(500), paidAmount: money(500), cycleMonth: "2026-09" };
-  check("CardBill com saldo restante = 0 = SETTLED", classifyCardBill(paidBill, CARD, { now: NOW }) === OBLIGATION_CLASS.SETTLED);
+  check("CardBill com saldo restante = 0 = SETTLED (mesmo se isCurrentRelevant)", classifyCardBill(paidBill, { isCurrentRelevant: true }) === OBLIGATION_CLASS.SETTLED);
 }
 {
   const overdueBill = { status: "overdue", dueDate: d("2026-01-01") }; // bem no passado, mesmo assim "atual"
