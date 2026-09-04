@@ -1,6 +1,23 @@
+// ============================================================================
+// scripts/audit.js — READ-ONLY, do início ao fim. Regra oficial (Norte v2):
+//
+// Este script NUNCA pode chamar uma função com semântica de getOrCreate/create/
+// update/delete/upsert, nem qualquer mutation de qualquer tipo — nem sequer uma
+// escrita idempotente (mesmo valor regravado). Só SELECT/aggregate/count.
+//
+// Motivo: este script é seguro por design pra rodar até contra produção (não
+// precisa de assertTestEnvironment() — ver docs/dev-environment.md). Essa
+// garantia só existe se ele for, de fato, 100% leitura. Se algum dia precisar
+// adicionar uma checagem nova, ela tem que usar só find/aggregate/count — se a
+// lógica que você precisa checar estiver hoje acoplada a uma função que também
+// escreve (como getOrCreateBill em lib/cardBillCalculator.js), extraia a parte
+// pura de cálculo pra sua própria função exportada (ver
+// computeExpectedCardBillTotal, extraída exatamente por esse motivo) e chame só
+// essa parte aqui.
+// ============================================================================
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
-import { getOrCreateBill } from "../lib/cardBillCalculator.js";
+import { computeExpectedCardBillTotal } from "../lib/cardBillCalculator.js";
 import { computeAccountBalance } from "../lib/accounts.js";
 import { buildVaSnapshot } from "../lib/vaPanel.js";
 
@@ -68,15 +85,24 @@ async function auditVaSnapshotMatchesAccountBalance() {
   );
 }
 
+// Recomputa o total esperado de cada fatura em aberto usando só
+// computeExpectedCardBillTotal (lib/cardBillCalculator.js) — uma função pura de
+// leitura (aggregate), extraída de getOrCreateBill() especificamente pra isto.
+// NUNCA chama getOrCreateBill() aqui — essa função pode fazer create/update.
 async function auditCardBills() {
   const openBills = await prisma.cardBill.findMany({ where: { status: { in: ["open", "partially_paid"] } } });
+  const cardsById = new Map();
   for (const bill of openBills) {
-    const before = bill.totalAmount;
-    const recomputed = await getOrCreateBill(bill.cardId, bill.cycleMonth);
+    let card = cardsById.get(bill.cardId);
+    if (!card) {
+      card = await prisma.card.findUnique({ where: { id: bill.cardId } });
+      cardsById.set(bill.cardId, card);
+    }
+    const expected = await computeExpectedCardBillTotal(card, bill.cycleMonth);
     check(
-      `CardBill ${bill.cycleMonth} bate com o recomputo ao vivo`,
-      Math.abs(before - recomputed.totalAmount) < 0.01,
-      `armazenado R$ ${before.toFixed(2)}, recomputado R$ ${recomputed.totalAmount.toFixed(2)}`
+      `CardBill ${bill.cycleMonth} bate com o recomputo (read-only)`,
+      Math.abs(bill.totalAmount - expected) < 0.01,
+      `armazenado R$ ${bill.totalAmount.toFixed(2)}, esperado R$ ${expected.toFixed(2)}`
     );
   }
 }
@@ -155,7 +181,7 @@ async function auditOrphans() {
 }
 
 async function main() {
-  console.log("--- Auditoria de consistência ---\n");
+  console.log("--- Auditoria de consistência (read-only) ---\n");
   await auditAccountBalances();
   await auditNoVirtualCreditInBalance();
   await auditVaSnapshotMatchesAccountBalance();
