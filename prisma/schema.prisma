@@ -40,6 +40,8 @@ model Account {
   recurringRules     RecurringRule[]
   cards              Card[]
   bills              Bill[]
+  reserves           Reserve[]
+  fundedCommitments  ConfirmedCommitment[]
 }
 
 model Card {
@@ -54,11 +56,12 @@ model Card {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  expenses     Expense[]
-  purchases    Purchase[]
-  bills        CardBill[]
-  limitUpdates CardLimitUpdate[]
-  transfers    Transfer[]
+  expenses        Expense[]
+  purchases       Purchase[]
+  bills           CardBill[]
+  limitUpdates    CardLimitUpdate[]
+  transfers       Transfer[]
+  creditMovements CardCreditMovement[]
 }
 
 model Income {
@@ -83,6 +86,8 @@ model Income {
   occurredAt          DateTime       @default(now())
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
+
+  receivable Receivable?
 
   @@index([occurredAt])
   @@index([accountId])
@@ -110,6 +115,9 @@ model Expense {
   occurredAt          DateTime       @default(now())
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
+
+  externalInstallment ExternalInstallment?
+  confirmedCommitment ConfirmedCommitment?
 
   // Invariante de app (não garantida pelo Prisma): exatamente um de accountId/cardId deve estar setado.
   @@index([occurredAt])
@@ -294,6 +302,264 @@ model Goal {
   isActive     Boolean   @default(true)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+}
+
+// ============================================================================
+// Fase 3.3 — Domain Models V2. Só estrutura + services; nenhum valor real
+// cadastrado, nenhum snapshot, nenhuma integração automática com freeMoney/
+// financialStatus ainda (isso é trabalho de fase futura — ver docs do blueprint).
+// ============================================================================
+
+// --- Reserve: alocação virtual de dinheiro dentro de uma Account real ---------
+
+// Sem ambiguidade de sinal — cada kind já diz a direção (nunca um ADJUSTMENT
+// genérico com sinal escondido no `amount`, que é SEMPRE positivo).
+//   ALLOCATE        + (primeira alocação de dinheiro pra dentro da reserva)
+//   REPLENISH       + (reposição — cobre o "replenishment gap")
+//   RELEASE         - (dinheiro sai da reserva, ex: funda um ConfirmedCommitment)
+//   ADJUST_INCREASE + (correção manual pra cima)
+//   ADJUST_DECREASE - (correção manual pra baixo)
+enum ReserveMovementKind {
+  ALLOCATE
+  REPLENISH
+  RELEASE
+  ADJUST_INCREASE
+  ADJUST_DECREASE
+}
+
+// Reserve NÃO tem campo de saldo mutável — de propósito. O saldo é sempre a soma
+// assinada do ledger (ReserveMovement), igual ao padrão já usado em Account
+// (BalanceAdjustment) e Card (CardLimitUpdate) — ver lib/reserves.js:getReserveBalance.
+model Reserve {
+  id           String   @id @default(cuid())
+  accountId    String
+  account      Account  @relation(fields: [accountId], references: [id])
+  name         String
+  targetAmount Decimal? @db.Decimal(12, 2)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  movements         ReserveMovement[]
+  fundedCommitments ConfirmedCommitment[]
+
+  @@index([accountId])
+}
+
+model ReserveMovement {
+  id         String              @id @default(cuid())
+  reserveId  String
+  reserve    Reserve             @relation(fields: [reserveId], references: [id])
+  amount     Decimal             @db.Decimal(12, 2) // SEMPRE positivo — CHECK no banco, ver migration.sql
+  kind       ReserveMovementKind
+  occurredAt DateTime            @default(now())
+  note       String?
+  confidence DataConfidence?
+  createdAt  DateTime            @default(now())
+
+  @@index([reserveId, occurredAt])
+}
+
+// --- External installments: parcelas fora do cartão pessoal (dívida com outra
+// pessoa, financiamento direto com um credor etc — ex: MacBook, Casa Ubatuba) ---
+
+// Só ACTIVE/CANCELLED — decisão do usuário sobre o PLANO em si (ele desistiu? foi
+// cancelado?). "Todas as parcelas foram pagas" é um estado DERIVADO das
+// ExternalInstallment (ver lib/externalInstallments.js:isPlanFullyPaid), nunca uma
+// terceira opção manual aqui — evita duas fontes de verdade pra a mesma pergunta
+// ("está completo?"), que é exatamente o anti-padrão que este model deve evitar.
+enum ExternalInstallmentPlanStatus {
+  ACTIVE
+  CANCELLED
+}
+
+model ExternalInstallmentPlan {
+  id               String                        @id @default(cuid())
+  description      String
+  creditor         String // pessoa/entidade credora — "mãe", "namorada", "loja X"
+  installmentValue Decimal                       @db.Decimal(12, 2)
+  installmentCount Int
+  firstDueDate     DateTime
+  status           ExternalInstallmentPlanStatus @default(ACTIVE)
+  confidence       DataConfidence?
+  notes            String?
+  createdAt        DateTime                      @default(now())
+  updatedAt        DateTime                      @updatedAt
+
+  installments ExternalInstallment[]
+}
+
+enum ExternalInstallmentStatus {
+  PENDING
+  PAID
+}
+
+model ExternalInstallment {
+  id        String                     @id @default(cuid())
+  planId    String
+  plan      ExternalInstallmentPlan    @relation(fields: [planId], references: [id], onDelete: Cascade)
+  number    Int
+  amount    Decimal                    @db.Decimal(12, 2)
+  dueDate   DateTime
+  status    ExternalInstallmentStatus  @default(PENDING)
+  paidAt    DateTime?
+  // Opcional de propósito: parcela paga antes do início do histórico operacional
+  // (ver AppSettings.operationalHistoryStart) pode estar PAID sem ter um Expense
+  // operacional correspondente — reconstruir esse histórico não é objetivo desta
+  // fase. Confidence NÃO existe aqui: é herdada semanticamente do Plan (a parcela é
+  // gerada deterministicamente a partir dele, não é um fato independente).
+  expenseId String?                    @unique
+  expense   Expense?                   @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  createdAt DateTime                   @default(now())
+  updatedAt DateTime                   @updatedAt
+
+  @@unique([planId, number])
+  @@index([dueDate])
+}
+
+// --- ConfirmedCommitment: obrigação confirmada sem origem definida ainda -------
+
+// CONFIRMED != FUNDED != SETTLED, sempre (Fase 2, decisão bloqueante já fechada):
+//   CONFIRMED — obrigação existe e é real, mas nenhuma decisão de funding ainda.
+//   FUNDED    — já existe decisão de origem do dinheiro (Reserve ou Account).
+//               NÃO significa que o pagamento aconteceu.
+//   SETTLED   — o movimento financeiro real aconteceu e está vinculado (expenseId).
+//   CANCELLED — obrigação descartada; não pode transicionar pra SETTLED depois.
+enum ConfirmedCommitmentStatus {
+  CONFIRMED
+  FUNDED
+  SETTLED
+  CANCELLED
+}
+
+model ConfirmedCommitment {
+  id          String                    @id @default(cuid())
+  description String
+  amount      Decimal                   @db.Decimal(12, 2)
+  dueDate     DateTime
+  status      ConfirmedCommitmentStatus @default(CONFIRMED)
+
+  // Origem do funding — no máximo uma das duas é usada na prática (a v1 dos
+  // services só implementa o caminho por Reserve, ver lib/commitments.js;
+  // fundingAccountId fica reservado no schema pra um funding direto por Account,
+  // trabalho futuro, sem necessidade de migration nova quando chegar a hora).
+  fundingAccountId String?
+  fundingAccount   Account? @relation(fields: [fundingAccountId], references: [id], onDelete: SetNull)
+  fundingReserveId String?
+  fundingReserve   Reserve? @relation(fields: [fundingReserveId], references: [id], onDelete: SetNull)
+  fundedAt         DateTime?
+
+  settledAt DateTime?
+  expenseId String?   @unique // impede dois commitments settled no mesmo Expense
+  expense   Expense?  @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+
+  notes      String?
+  confidence DataConfidence?
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  @@index([status])
+  @@index([dueDate])
+}
+
+// --- Contingency: risco/possível gasto futuro, NUNCA entra em freeMoney --------
+
+enum ContingencyStatus {
+  AWAITING_INFORMATION
+  CONFIRMED
+  DISMISSED
+}
+
+model Contingency {
+  id             String            @id @default(cuid())
+  description    String
+  expectedAmount Decimal?          @db.Decimal(12, 2) // CHECK 0 <= expectedAmount <= maxAmount, ver migration.sql
+  maxAmount      Decimal           @db.Decimal(12, 2) // CHECK maxAmount > 0
+  expectedDate   DateTime?
+  status         ContingencyStatus @default(AWAITING_INFORMATION)
+  notes          String?
+  confidence     DataConfidence?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+}
+
+// --- Receivable: dinheiro a receber — NUNCA conta como recebido só pela data ---
+
+enum ReceivableStatus {
+  PENDING
+  RECEIVED
+  CANCELLED
+}
+
+model Receivable {
+  id           String           @id @default(cuid())
+  description  String
+  counterparty String
+  amount       Decimal          @db.Decimal(12, 2)
+  expectedDate DateTime?
+  status       ReceivableStatus @default(PENDING)
+  incomeId     String?          @unique // impede dois receivables vinculados ao mesmo Income
+  income       Income?          @relation(fields: [incomeId], references: [id], onDelete: SetNull)
+  confidence   DataConfidence?
+  notes        String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+}
+
+// --- CategoryBudget: config/intenção por ciclo, não fato reconstruído ----------
+// Sem `confidence` de propósito (ver Fase 3.2, item 11) — isto é uma escolha do
+// usuário sobre o futuro, não uma reconstrução de um fato passado.
+
+model CategoryBudget {
+  id         String   @id @default(cuid())
+  category   String
+  cycleStart DateTime @db.Date // só a data, sem componente de hora — ver comentário abaixo
+  amount     Decimal  @db.Decimal(12, 2)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // cycleEnd deliberadamente NÃO existe aqui — é sempre derivável de cycleStart +
+  // AppSettings.cycleStartDay (duração de um ciclo == até o dia anterior ao próximo
+  // cycleStartDay). Armazenar os dois seria uma segunda fonte de verdade que pode
+  // divergir se AppSettings mudar depois.
+  @@unique([category, cycleStart])
+}
+
+// --- CardCreditMovement: saldo credor do CARTÃO (não da fatura) ----------------
+
+// Mesma disciplina de sinal do ReserveMovementKind — nunca um kind genérico.
+//   CREDIT_GRANTED  + (crédito concedido — ex: pagou mais que o restante da fatura)
+//   CREDIT_APPLIED  - (crédito consumido — ex: abateu uma compra nova)
+//   ADJUST_INCREASE + (correção manual pra cima)
+//   ADJUST_DECREASE - (correção manual pra baixo)
+//
+// IMPORTANTE: este ledger nunca apaga/reduz Purchase/Expense original — aplicar
+// crédito é só um efeito no SALDO CREDOR, o gasto real continua exatamente como
+// foi lançado (ver exemplo no cabeçalho de lib/cardCredit.js).
+enum CardCreditMovementKind {
+  CREDIT_GRANTED
+  CREDIT_APPLIED
+  ADJUST_INCREASE
+  ADJUST_DECREASE
+}
+
+model CardCreditMovement {
+  id         String                 @id @default(cuid())
+  cardId     String
+  card       Card                   @relation(fields: [cardId], references: [id])
+  amount     Decimal                @db.Decimal(12, 2) // SEMPRE positivo — CHECK no banco, ver migration.sql
+  kind       CardCreditMovementKind
+  occurredAt DateTime               @default(now())
+  note       String?
+  confidence DataConfidence?
+  // Referências soltas (sem @relation — só rastreabilidade, não uma FK de verdade;
+  // evita ter que abrir mão-dupla de array em CardBill/Transfer só pra isso) pro
+  // evento que originou este movimento, quando aplicável.
+  cardBillId String?
+  transferId String?
+  createdAt  DateTime               @default(now())
+
+  @@index([cardId, occurredAt])
 }
 
 model PendingBotMessage {

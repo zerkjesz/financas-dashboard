@@ -20,6 +20,10 @@ import { PrismaClient } from "@prisma/client";
 import { computeExpectedCardBillTotal } from "../lib/cardBillCalculator.js";
 import { computeAccountBalance } from "../lib/accounts.js";
 import { buildVaSnapshot } from "../lib/vaPanel.js";
+// Fase 3.3 — getReserveBalance/getCardCreditBalance são puramente leitura (só
+// agregam ReserveMovement/CardCreditMovement já existentes, nunca escrevem).
+import { getReserveBalance } from "../lib/reserves.js";
+import { getCardCreditBalance } from "../lib/cardCredit.js";
 // Decimal-first (Fase 3.1, Etapa 13): todo campo monetário lido do Prisma agora é
 // Decimal (Prisma.Decimal/decimal.js) — nunca `+`/`-`/`Math.abs()` nativos nele (viram
 // NaN/concatenação de string silenciosa, não um erro). Este script continua 100%
@@ -233,7 +237,17 @@ async function auditAppSettingsSingleton() {
 // nem a nenhum outro model — pega uma regressão de escopo se alguém adicionar o
 // campo em outro lugar sem essa checagem ser atualizada de propósito.
 async function auditDataConfidenceScope() {
-  const EXPECTED_WITH_CONFIDENCE = new Set(["Income", "Expense", "Transfer", "BalanceAdjustment", "CardLimitUpdate", "Purchase", "Bill"]);
+  // Fase 3.2: Income, Expense, Transfer, BalanceAdjustment, CardLimitUpdate,
+  // Purchase, Bill. Fase 3.3: + ReserveMovement, ExternalInstallmentPlan,
+  // ConfirmedCommitment, Contingency, Receivable, CardCreditMovement. Fora de
+  // propósito: Reserve (metadata, o fato está no movement), ExternalInstallment
+  // (herda semanticamente do Plan), CategoryBudget (config/intenção, não fato),
+  // RecurringRule (regra futura, não fato reconstruído), CardBill/Installment/
+  // LegacyTransaction (derivados/deterministicos/congelados).
+  const EXPECTED_WITH_CONFIDENCE = new Set([
+    "Income", "Expense", "Transfer", "BalanceAdjustment", "CardLimitUpdate", "Purchase", "Bill",
+    "ReserveMovement", "ExternalInstallmentPlan", "ConfirmedCommitment", "Contingency", "Receivable", "CardCreditMovement",
+  ]);
   const rows = await prisma.$queryRawUnsafe(
     `SELECT table_name::text AS table_name FROM information_schema.columns WHERE column_name = 'confidence' AND table_schema = 'public'`
   );
@@ -241,7 +255,7 @@ async function auditDataConfidenceScope() {
   const missing = [...EXPECTED_WITH_CONFIDENCE].filter((m) => !actualWithConfidence.has(m));
   const unexpected = [...actualWithConfidence].filter((m) => !EXPECTED_WITH_CONFIDENCE.has(m));
   check(
-    "Coluna `confidence` existe exatamente nos 7 models aprovados (nenhum a mais, nenhum a menos)",
+    `Coluna \`confidence\` existe exatamente nos ${EXPECTED_WITH_CONFIDENCE.size} models aprovados (nenhum a mais, nenhum a menos)`,
     missing.length === 0 && unexpected.length === 0,
     `faltando=${JSON.stringify(missing)}, inesperado=${JSON.stringify(unexpected)}`
   );
@@ -261,6 +275,125 @@ async function auditDataConfidenceScope() {
   check("Nenhum valor de confidence fora do enum permitido em nenhum dos 7 models", invalid.length === 0, invalid.join(", "));
 }
 
+// Fase 3.3 — Domain Models V2. Todas as checagens abaixo são só find/aggregate/
+// count, nunca escrevem (getReserveBalance/getCardCreditBalance também são
+// puramente leitura — ver import no topo do arquivo).
+
+async function auditReserveBalances() {
+  const reserves = await prisma.reserve.findMany({ where: { isActive: true } });
+  for (const reserve of reserves) {
+    const balance = await getReserveBalance(reserve.id);
+    check(
+      `Reserve "${reserve.name}" tem saldo não-negativo`,
+      balance.gte(0),
+      `R$ ${balance.toFixed(2)}`
+    );
+  }
+}
+
+async function auditPositiveLedgerAmounts() {
+  // Redundante com o CHECK do banco (amount > 0), mas confirmado por evidência de
+  // dado real mesmo assim — mesmo espírito do resto deste script.
+  const [reserveMovements, cardCreditMovements, externalInstallments, commitments, receivables, contingencies] = await Promise.all([
+    prisma.reserveMovement.count({ where: { amount: { lte: 0 } } }),
+    prisma.cardCreditMovement.count({ where: { amount: { lte: 0 } } }),
+    prisma.externalInstallment.count({ where: { amount: { lte: 0 } } }),
+    prisma.confirmedCommitment.count({ where: { amount: { lte: 0 } } }),
+    prisma.receivable.count({ where: { amount: { lte: 0 } } }),
+    prisma.contingency.count({ where: { maxAmount: { lte: 0 } } }),
+  ]);
+  check("Nenhum ReserveMovement.amount <= 0", reserveMovements === 0, `${reserveMovements} encontrado(s)`);
+  check("Nenhum CardCreditMovement.amount <= 0", cardCreditMovements === 0, `${cardCreditMovements} encontrado(s)`);
+  check("Nenhum ExternalInstallment.amount <= 0", externalInstallments === 0, `${externalInstallments} encontrado(s)`);
+  check("Nenhum ConfirmedCommitment.amount <= 0", commitments === 0, `${commitments} encontrado(s)`);
+  check("Nenhum Receivable.amount <= 0", receivables === 0, `${receivables} encontrado(s)`);
+  check("Nenhuma Contingency.maxAmount <= 0", contingencies === 0, `${contingencies} encontrado(s)`);
+}
+
+async function auditExternalInstallmentNumbers() {
+  const plans = await prisma.externalInstallmentPlan.findMany({ include: { installments: true } });
+  for (const plan of plans) {
+    const numbers = plan.installments.map((i) => i.number).sort((a, b) => a - b);
+    const expected = Array.from({ length: plan.installmentCount }, (_, i) => i + 1);
+    check(
+      `ExternalInstallmentPlan "${plan.description}" tem números de parcela 1..${plan.installmentCount} sem lacuna/duplicata`,
+      JSON.stringify(numbers) === JSON.stringify(expected),
+      `esperado ${JSON.stringify(expected)}, achado ${JSON.stringify(numbers)}`
+    );
+  }
+}
+
+async function auditSettledCommitments() {
+  const settled = await prisma.confirmedCommitment.findMany({ where: { status: "SETTLED" }, include: { expense: true } });
+  for (const c of settled) {
+    check(
+      `ConfirmedCommitment "${c.description}" (SETTLED) tem expenseId + settledAt + Expense real`,
+      c.expenseId != null && c.settledAt != null && c.expense != null,
+      `expenseId=${c.expenseId}, settledAt=${c.settledAt}, expense existe=${c.expense != null}`
+    );
+  }
+
+  const expenseIds = settled.map((c) => c.expenseId).filter(Boolean);
+  const uniqueExpenseIds = new Set(expenseIds);
+  check(
+    "Nenhum Expense vinculado a mais de um ConfirmedCommitment settled (vínculo duplicado)",
+    expenseIds.length === uniqueExpenseIds.size,
+    `${expenseIds.length} vínculos, ${uniqueExpenseIds.size} únicos`
+  );
+}
+
+async function auditReceivedReceivables() {
+  const received = await prisma.receivable.findMany({ where: { status: "RECEIVED" }, include: { income: true } });
+  for (const r of received) {
+    check(
+      `Receivable "${r.description}" (RECEIVED) tem incomeId + Income real`,
+      r.incomeId != null && r.income != null,
+      `incomeId=${r.incomeId}, income existe=${r.income != null}`
+    );
+  }
+
+  const incomeIds = received.map((r) => r.incomeId).filter(Boolean);
+  const uniqueIncomeIds = new Set(incomeIds);
+  check(
+    "Nenhum Income vinculado a mais de um Receivable recebido (vínculo duplicado)",
+    incomeIds.length === uniqueIncomeIds.size,
+    `${incomeIds.length} vínculos, ${uniqueIncomeIds.size} únicos`
+  );
+}
+
+async function auditContingencyBounds() {
+  const contingencies = await prisma.contingency.findMany({ where: { expectedAmount: { not: null } } });
+  for (const c of contingencies) {
+    const expected = c.expectedAmount;
+    check(
+      `Contingency "${c.description}": expectedAmount dentro de [0, maxAmount]`,
+      expected.gte(0) && expected.lte(c.maxAmount),
+      `expected=${expected.toFixed(2)}, max=${c.maxAmount.toFixed(2)}`
+    );
+  }
+}
+
+async function auditCardCreditBalances() {
+  const cards = await prisma.card.findMany();
+  for (const card of cards) {
+    const hasMovements = (await prisma.cardCreditMovement.count({ where: { cardId: card.id } })) > 0;
+    if (!hasMovements) continue;
+    const balance = await getCardCreditBalance(card.id);
+    check(`Saldo credor do cartão "${card.name}" é não-negativo`, balance.gte(0), `R$ ${balance.toFixed(2)}`);
+  }
+}
+
+async function auditExternalInstallmentExpenseLinks() {
+  const paid = await prisma.externalInstallment.findMany({ where: { status: "PAID", expenseId: { not: null } } });
+  const expenseIds = paid.map((i) => i.expenseId);
+  const uniqueExpenseIds = new Set(expenseIds);
+  check(
+    "Nenhum Expense vinculado a mais de uma ExternalInstallment (vínculo duplicado)",
+    expenseIds.length === uniqueExpenseIds.size,
+    `${expenseIds.length} vínculos, ${uniqueExpenseIds.size} únicos`
+  );
+}
+
 async function main() {
   console.log("--- Auditoria de consistência (read-only) ---\n");
   await auditAccountBalances();
@@ -273,6 +406,14 @@ async function main() {
   await auditOrphans();
   await auditAppSettingsSingleton();
   await auditDataConfidenceScope();
+  await auditReserveBalances();
+  await auditPositiveLedgerAmounts();
+  await auditExternalInstallmentNumbers();
+  await auditSettledCommitments();
+  await auditReceivedReceivables();
+  await auditContingencyBounds();
+  await auditCardCreditBalances();
+  await auditExternalInstallmentExpenseLinks();
 
   console.log(`\n${problems.length === 0 ? "✅ Tudo consistente." : `❌ ${problems.length} divergência(s) encontrada(s).`}`);
   process.exitCode = problems.length === 0 ? 0 : 1;
