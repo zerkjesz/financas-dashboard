@@ -104,7 +104,7 @@ export default function CartoesView() {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {(bills[card.id] || []).map((bill) => (
-                    <tr key={bill.id}>
+                    <tr key={bill.cycleMonth}>
                       <td className="px-3 py-2 text-slate-200">{bill.cycleMonth}</td>
                       <td className="px-3 py-2 text-muted">{formatDate(bill.closesAt)}</td>
                       <td className="px-3 py-2 text-muted">{formatDate(bill.dueAt)}</td>

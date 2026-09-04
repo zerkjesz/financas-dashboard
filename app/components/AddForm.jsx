@@ -61,10 +61,14 @@ export default function AddForm({ accounts, cards, onSubmitted, onCancel }) {
       } else if (type === "bill_payment") {
         const card = cards.find((c) => c.id === cardId);
         if (!card?.currentBill) throw new Error("Fatura atual não encontrada.");
-        await postJson(`/api/cards/${cardId}/bills/${card.currentBill.id}/pay`, {
+        // currentBill pode ser uma PROJEÇÃO (id: null, Fase 4.1.3) — usa um
+        // placeholder na URL e manda cycleMonth pro backend materializar sob
+        // demanda, só porque isto é um pagamento (mutação), nunca um GET.
+        await postJson(`/api/cards/${cardId}/bills/${card.currentBill.id || "projected"}/pay`, {
           fromAccountId: accountId,
           amount: value,
           description,
+          cycleMonth: card.currentBill.cycleMonth,
         });
       } else if (type === "balance_adjustment") {
         await postJson(`/api/accounts/${accountId}/adjustments`, { newBalance: value, note: description });

@@ -25,7 +25,7 @@ import { buildVaSnapshot } from "../lib/vaPanel.js";
 import { getReserveBalance } from "../lib/reserves.js";
 // Fase 4.1 — getObligationsBreakdown é puramente leitura (só classifica dado já
 // existente, nunca escreve — mesma garantia de computeExpectedCardBillTotal acima).
-import { getObligationsBreakdown, resolveCurrentRelevantCardBillId } from "../lib/freeMoney.js";
+import { getObligationsBreakdown, resolveCurrentRelevantCardBillCycleMonth } from "../lib/freeMoney.js";
 import { getCardCreditBalance } from "../lib/cardCredit.js";
 // Decimal-first (Fase 3.1, Etapa 13): todo campo monetário lido do Prisma agora é
 // Decimal (Prisma.Decimal/decimal.js) — nunca `+`/`-`/`Math.abs()` nativos nele (viram
@@ -541,20 +541,21 @@ async function auditObligationClassesMutuallyExclusive() {
   check("Nenhuma obrigação classificada em mais de uma classe simultaneamente (incurred/currentHorizon/future)", duplicated.length === 0, JSON.stringify(duplicated));
 }
 
-// Fase 4.1.2 — Card Liability Gate. A seleção "primeira fatura não liquidada"
-// (lib/freeMoney.js:resolveCurrentRelevantCardBillId) não depende de data
-// nenhuma — funciona corretamente mesmo se o calendário/hora de fechamento for
-// impreciso (item 3). Mas ela PRESSUPÕE que a materialização de CardBill é
-// contígua ao redor de "agora" (sem lacuna). Esta checagem é a rede de
-// segurança dessa suposição: sinaliza (não falha o script) se a fatura
+// Fase 4.1.2/4.1.3 — Card Liability Gate. A seleção "primeira fatura não
+// liquidada" (lib/freeMoney.js:resolveCurrentRelevantCardBillCycleMonth) não
+// depende de data nenhuma — funciona corretamente mesmo se o calendário/hora
+// de fechamento for impreciso (item 3). Mas ela PRESSUPÕE que a materialização
+// de CardBill é contígua ao redor de "agora" (sem lacuna). Esta checagem é a
+// rede de segurança dessa suposição, olhando só o que está PERSISTIDO (é isso
+// que este script audita) — sinaliza (não falha o script) se a fatura
 // "relevante" resolvida pra algum cartão estiver anormalmente longe no tempo —
-// evidência de uma possível lacuna de materialização, não uma prova de bug.
+// evidência de uma possível lacuna, não uma prova de bug.
 function auditCurrentRelevantCardBillDistance(cardsWithBills, now) {
   const ANOMALY_THRESHOLD_DAYS = 62; // ~2 ciclos de folga — generoso de propósito, só pra pegar lacuna real.
   for (const { card, bills } of cardsWithBills) {
-    const currentId = resolveCurrentRelevantCardBillId(bills);
-    if (!currentId) continue; // nenhuma fatura não liquidada — nada a checar.
-    const bill = bills.find((b) => b.id === currentId);
+    const currentCycleMonth = resolveCurrentRelevantCardBillCycleMonth(bills);
+    if (!currentCycleMonth) continue; // nenhuma fatura não liquidada — nada a checar.
+    const bill = bills.find((b) => b.cycleMonth === currentCycleMonth);
     const daysFromNow = Math.abs((bill.closesAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
     check(
       `Card "${card.name}": fatura relevante (${bill.cycleMonth}) está a uma distância razoável de hoje (possível lacuna de materialização, senão)`,

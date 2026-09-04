@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { listAccountsWithBalances } from "@/lib/accounts";
 import { listCardsWithLimits } from "@/lib/cards";
-import { getOrCreateBill } from "@/lib/cardBillCalculator";
+import { getCardBillView } from "@/lib/cardBillCalculator";
 import { getCardCycleForDate } from "@/lib/cardCycle";
 import { buildFinancialSummary } from "@/lib/intelligence";
 import { buildVaSnapshot } from "@/lib/vaPanel";
@@ -33,10 +33,14 @@ export async function GET() {
   // Fase 4.0: ciclo real de CADA cartão (closingDay-aware) — antes era um "mês
   // calendário de hoje" único e compartilhado, que ignoraria closingDay se ele
   // existisse. Idêntico ao valor antigo enquanto closingDay continuar null.
+  //
+  // Fase 4.1.3: getCardBillView (não getOrCreateBill) — GET nunca materializa;
+  // devolve a fatura persistida se existir, senão uma PROJEÇÃO em memória
+  // (id: null), sem nenhum INSERT/UPDATE.
   const cards = await Promise.all(
     cardsBase.map(async (card) => {
       const currentCycle = getCardCycleForDate(card, new Date());
-      return { ...card, currentBill: await getOrCreateBill(card.id, currentCycle) };
+      return { ...card, currentBill: await getCardBillView(card, currentCycle) };
     })
   );
 
