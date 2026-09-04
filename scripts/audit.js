@@ -2,6 +2,7 @@ import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { getOrCreateBill } from "../lib/cardBillCalculator.js";
 import { computeAccountBalance } from "../lib/accounts.js";
+import { buildVaSnapshot } from "../lib/vaPanel.js";
 
 const prisma = new PrismaClient();
 const problems = [];
@@ -47,6 +48,24 @@ async function auditNoVirtualCreditInBalance() {
       `computeAccountBalance=R$ ${real.toFixed(2)}, recompute independente=R$ ${raw.toFixed(2)}`
     );
   }
+}
+
+// O painel de VA (buildVaSnapshot) não pode ter uma segunda fonte de verdade pro saldo
+// — tem que bater exatamente com computeAccountBalance da Account correspondente (era
+// o bug corrigido na Fase 1.2: vaPanel.js tinha seu próprio cálculo, que ainda somava
+// recarga futura ao saldo mostrado).
+async function auditVaSnapshotMatchesAccountBalance() {
+  const account = await prisma.account.findUnique({ where: { slug: "vale-alimentacao" } });
+  if (!account) {
+    check("Conta de Vale Alimentação existe pra checar o painel", false, "conta não encontrada");
+    return;
+  }
+  const [snapshot, realBalance] = await Promise.all([buildVaSnapshot(), computeAccountBalance(account.id)]);
+  check(
+    "Saldo do painel de VA (buildVaSnapshot) bate com o saldo real da Account",
+    snapshot != null && Math.abs(snapshot.balance - realBalance) < 0.01,
+    `painel=R$ ${snapshot?.balance?.toFixed(2)}, Account real=R$ ${realBalance.toFixed(2)}`
+  );
 }
 
 async function auditCardBills() {
@@ -139,6 +158,7 @@ async function main() {
   console.log("--- Auditoria de consistência ---\n");
   await auditAccountBalances();
   await auditNoVirtualCreditInBalance();
+  await auditVaSnapshotMatchesAccountBalance();
   await auditCardBills();
   await auditCardBillStatus();
   await auditAnticipations();
