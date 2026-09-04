@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { getOrCreateBill } from "../lib/cardBillCalculator.js";
+import { computeAccountBalance } from "../lib/accounts.js";
 
 const prisma = new PrismaClient();
 const problems = [];
@@ -29,6 +30,22 @@ async function auditAccountBalances() {
   for (const account of accounts) {
     const balance = await rawAccountBalance(account.id);
     check(`Saldo de "${account.name}" é finito e >= -0.01`, Number.isFinite(balance) && balance >= -0.01, `R$ ${balance.toFixed(2)}`);
+  }
+}
+
+// Saldo real (lib/accounts.js) precisa bater exatamente com o recompute independente
+// (rawAccountBalance, acima) — os dois usam a MESMA fórmula (âncora + movimento real).
+// Se algum dia alguém reintroduzir receita recorrente virtual na fórmula de saldo real
+// (removida na Fase 1.1), essa checagem diverge e pega o regresso.
+async function auditNoVirtualCreditInBalance() {
+  const accounts = await prisma.account.findMany();
+  for (const account of accounts) {
+    const [real, raw] = await Promise.all([computeAccountBalance(account.id), rawAccountBalance(account.id)]);
+    check(
+      `Saldo real de "${account.name}" não inclui receita recorrente virtual`,
+      Math.abs(real - raw) < 0.01,
+      `computeAccountBalance=R$ ${real.toFixed(2)}, recompute independente=R$ ${raw.toFixed(2)}`
+    );
   }
 }
 
@@ -121,6 +138,7 @@ async function auditOrphans() {
 async function main() {
   console.log("--- Auditoria de consistência ---\n");
   await auditAccountBalances();
+  await auditNoVirtualCreditInBalance();
   await auditCardBills();
   await auditCardBillStatus();
   await auditAnticipations();
