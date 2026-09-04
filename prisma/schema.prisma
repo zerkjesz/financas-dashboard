@@ -83,12 +83,24 @@ model Income {
   confidence          DataConfidence?
   rawMessage          String?
   legacyTransactionId String?        @unique
+  // Fase 4.0.2 — identifica EXPLICITAMENTE qual ocorrência prevista de
+  // `recurringRuleId` este Income realiza, pela DATA EXATA prevista (não por mês
+  // calendário nem ciclo financeiro — os três são conceitos diferentes e não
+  // devem se misturar num só campo, ver lib/incomeHorizon.js). Nullable de
+  // propósito, SEM default/backfill (mesma política de não-afirmação retroativa
+  // da Fase 3.2): todo Income existente antes desta fase fica com
+  // recurringOccurrenceDate NULL, mesmo que já tenha recurringRuleId setado —
+  // vínculo explícito só passa a existir via
+  // lib/incomeHorizon.js:recordRecurringIncomeOccurrence()/
+  // linkIncomeToRecurringOccurrence(), nunca por heurística.
+  recurringOccurrenceDate DateTime? @db.Date
   occurredAt          DateTime       @default(now())
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
   receivable Receivable?
 
+  @@unique([recurringRuleId, recurringOccurrenceDate])
   @@index([occurredAt])
   @@index([accountId])
 }

@@ -463,6 +463,40 @@ async function auditCardBillDateSanity() {
   }
 }
 
+// Fase 4.0.2 — vínculo Income <-> RecurringRule por recurringOccurrenceDate.
+async function auditRecurringIncomeOccurrences() {
+  const withOccurrenceDate = await prisma.income.findMany({
+    where: { recurringOccurrenceDate: { not: null } },
+    include: { recurringRule: true },
+  });
+  for (const income of withOccurrenceDate) {
+    check(
+      `Income ${income.id}: recurringOccurrenceDate não-nulo tem recurringRuleId não-nulo`,
+      income.recurringRuleId != null,
+      `recurringRuleId=${income.recurringRuleId}`
+    );
+    if (income.recurringRuleId != null) {
+      check(
+        `Income ${income.id}: RecurringRule vinculada existe e é kind=income`,
+        income.recurringRule != null && income.recurringRule.kind === "income",
+        `recurringRule=${income.recurringRule ? income.recurringRule.kind : "não encontrada"}`
+      );
+    }
+  }
+
+  // Duplicidade já é impossível pela @@unique([recurringRuleId,
+  // recurringOccurrenceDate]) do banco — confirmado por evidência mesmo assim
+  // (mesmo espírito do resto deste script: nunca só confiar na constraint).
+  const grouped = new Map();
+  for (const income of withOccurrenceDate) {
+    if (income.recurringRuleId == null) continue;
+    const key = `${income.recurringRuleId}:${income.recurringOccurrenceDate.toISOString().slice(0, 10)}`;
+    grouped.set(key, (grouped.get(key) || 0) + 1);
+  }
+  const duplicated = [...grouped.entries()].filter(([, count]) => count > 1);
+  check("Nenhuma ocorrência (recurringRuleId + recurringOccurrenceDate) duplicada", duplicated.length === 0, JSON.stringify(duplicated));
+}
+
 async function main() {
   console.log("--- Auditoria de consistência (read-only) ---\n");
   await auditAccountBalances();
@@ -487,6 +521,7 @@ async function main() {
   await auditExternalInstallmentPlanCompleteness();
   await auditCommitmentFunding();
   await auditCardBillDateSanity();
+  await auditRecurringIncomeOccurrences();
 
   console.log(`\n${problems.length === 0 ? "✅ Tudo consistente." : `❌ ${problems.length} divergência(s) encontrada(s).`}`);
   process.exitCode = problems.length === 0 ? 0 : 1;

@@ -54,7 +54,7 @@ const VA_RULE = { id: "rule-va", kind: "income", isActive: true, dayOfMonth: 21,
   const result = resolveNextExpectedIncome({
     now: d("2026-09-24"),
     recurringRules: [SALARY_RULE],
-    realizedIncomes: [{ recurringRuleId: SALARY_RULE.id, cycleMonth: "2026-09" }],
+    realizedIncomes: [{ recurringRuleId: SALARY_RULE.id, recurringOccurrenceDate: "2026-09-24" }],
     accounts: ACCOUNTS,
     settings: SETTINGS,
   });
