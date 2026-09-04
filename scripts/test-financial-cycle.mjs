@@ -2,7 +2,7 @@
 // Mesmo estilo de scripts/test-money.mjs: node + assert puro, roda em qualquer
 // ambiente (não precisa de assertTestEnvironment() — não toca banco nenhum).
 import assert from "node:assert/strict";
-import { getFinancialCycleForDate, getCurrentFinancialCycle, getNextCycleStart, getNextIncomeDate } from "../lib/financialCycle.js";
+import { getFinancialCycleForDate, getCurrentFinancialCycle, getNextCycleStart } from "../lib/financialCycle.js";
 import { getCardBillPeriod, getCardBillClosesAt, getCardBillDueDate, getCardCycleForDate } from "../lib/cardCycle.js";
 import {
   OBLIGATION_CLASS,
@@ -49,29 +49,25 @@ console.log("--- Testes puros: financialCycle / cardCycle / obligationClassifier
   check("24/09/2026 inicia novo ciclo (24/09→23/10)", iso(cycle.start) === "2026-09-24" && iso(cycle.end) === "2026-10-23", `${iso(cycle.start)}..${iso(cycle.end)}`);
 }
 {
-  const next = getNextIncomeDate(SETTINGS, d("2026-09-04"));
-  check("04/09/2026 nextIncomeDate = 24/09/2026", iso(next) === "2026-09-24", iso(next));
+  // Fase 4.0.1: getNextCycleStart é só mecânica de CALENDÁRIO — "quando cai a
+  // próxima renda de verdade" agora é responsabilidade de lib/incomeHorizon.js
+  // (ver scripts/test-income-horizon.mjs), nunca desta função.
+  const nextStart = getNextCycleStart(SETTINGS, d("2026-09-04"));
+  check("04/09/2026: próximo início de ciclo = 24/09/2026", iso(nextStart) === "2026-09-24", iso(nextStart));
 }
 {
-  // Decisão de boundary documentada em lib/financialCycle.js: no próprio
-  // cycleStartDay, a renda já é "agora" (início do ciclo atual) — a PRÓXIMA
-  // (posterior) só vem no mês seguinte.
-  const next = getNextIncomeDate(SETTINGS, d("2026-09-24"));
-  check("24/09/2026 (exatamente no cycleStartDay) → nextIncomeDate = 24/10/2026 (não o próprio dia)", iso(next) === "2026-10-24", iso(next));
+  const nextStart = getNextCycleStart(SETTINGS, d("2026-09-24"));
+  check("24/09/2026 (exatamente no cycleStartDay): próximo início de ciclo = 24/10/2026 (não o próprio dia)", iso(nextStart) === "2026-10-24", iso(nextStart));
 }
 {
   const cycle = getCurrentFinancialCycle(SETTINGS, d("2026-12-28"));
   check("virada dezembro/janeiro: 28/12 → ciclo 24/12→23/01", iso(cycle.start) === "2026-12-24" && iso(cycle.end) === "2027-01-23", `${iso(cycle.start)}..${iso(cycle.end)}`);
-  const next = getNextIncomeDate(SETTINGS, d("2026-12-28"));
-  check("virada dezembro/janeiro: nextIncomeDate = 24/01/2027", iso(next) === "2027-01-24", iso(next));
+  const nextStart = getNextCycleStart(SETTINGS, d("2026-12-28"));
+  check("virada dezembro/janeiro: próximo início de ciclo = 24/01/2027", iso(nextStart) === "2027-01-24", iso(nextStart));
 }
 {
   const cycle = getFinancialCycleForDate(d("2026-02-10"), SETTINGS);
   check("fevereiro: 10/02 → ciclo 24/01→23/02", iso(cycle.start) === "2026-01-24" && iso(cycle.end) === "2026-02-23", `${iso(cycle.start)}..${iso(cycle.end)}`);
-}
-{
-  const nextStart = getNextCycleStart(SETTINGS, d("2026-09-04"));
-  check("getNextCycleStart === getNextIncomeDate em v1", iso(nextStart) === iso(getNextIncomeDate(SETTINGS, d("2026-09-04"))));
 }
 
 // ============================================================================
