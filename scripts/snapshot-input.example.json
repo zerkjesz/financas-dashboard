@@ -1,0 +1,108 @@
+{
+  "_comment": "TEMPLATE versionável — valores 100% fictícios. Copie para snapshot-input.local.json (gitignored) e preencha com dados reais. Nunca preencha este arquivo com dados reais.",
+  "asOf": "2026-01-15",
+
+  "checkingAccount": {
+    "slug": "conta-corrente-exemplo",
+    "checkpointA": {
+      "amount": 1000.00,
+      "date": "2026-01-15",
+      "confidence": "CONFIRMED",
+      "note": "Saldo observado no extrato antes dos movimentos do dia"
+    },
+    "movementsAfterCheckpointA": [
+      {
+        "type": "INFLOW",
+        "description": "Exemplo de entrada de dinheiro",
+        "amount": 200.00,
+        "date": "2026-01-15",
+        "movementConfidence": "CONFIRMED",
+        "economicClassification": "EXAMPLE_INCOME"
+      },
+      {
+        "type": "TRANSFER_OUT_EXTERNAL",
+        "description": "Exemplo de transferência para fora do escopo monitorado",
+        "amount": 100.00,
+        "date": "2026-01-15",
+        "movementConfidence": "CONFIRMED",
+        "economicClassification": "EXAMPLE_EXTERNAL_TRANSFER"
+      },
+      {
+        "type": "OUTFLOW_UNKNOWN",
+        "description": "Exemplo de saída sem classificação econômica definida",
+        "amount": 10.00,
+        "date": "2026-01-15",
+        "movementConfidence": "CONFIRMED",
+        "economicClassification": "UNKNOWN"
+      }
+    ],
+    "checkpointB": {
+      "amount": 1090.00,
+      "date": "2026-01-15",
+      "confidence": "CONFIRMED"
+    }
+  },
+
+  "restrictedAccount": {
+    "slug": "vale-alimentacao-exemplo",
+    "recharge": { "amount": 500.00, "date": "2026-01-01", "confidence": "CONFIRMED" },
+    "observedClosing": { "amount": 300.00, "date": "2026-01-15", "confidence": "CONFIRMED" }
+  },
+
+  "mainIncome": {
+    "amount": 3000.00,
+    "date": "2026-01-01",
+    "dayOfMonth": 1,
+    "confidence": "CONFIRMED"
+  },
+
+  "card": {
+    "slug": "cartao-exemplo",
+    "totalLimit": 2000.00,
+    "observedAvailable": 1500.00,
+    "closingDay": 10,
+    "dueDay": 17,
+    "bills": [
+      { "cycleMonth": "2026-01", "amount": 300.00, "status": "PAID" },
+      { "cycleMonth": "2026-02", "amount": 200.00, "status": "UNPAID" },
+      { "cycleMonth": "2026-03", "amount": 100.00, "status": "UNPAID" }
+    ]
+  },
+
+  "externalTransfers": [
+    {
+      "purpose": "Exemplo de alocação para fora do escopo (ex: outra pessoa jurídica)",
+      "amountTransferred": 100.00,
+      "destination": "EXAMPLE_EXTERNAL_SCOPE",
+      "date": "2026-01-15",
+      "confidence": "CONFIRMED",
+      "formerlyModeledAs": null
+    }
+  ],
+
+  "confirmedCommitments": [
+    {
+      "description": "Exemplo de compromisso confirmado sem funding definido",
+      "amount": 250.00,
+      "dateCandidates": ["2026-01-20"],
+      "dateConfidence": "CONFIRMED",
+      "funding": "UNDEFINED",
+      "amountConfidence": "CONFIRMED_BY_MEMORY"
+    }
+  ],
+
+  "contingencies": [
+    {
+      "description": "Exemplo de risco aguardando orçamento",
+      "expectedAmount": 100.00,
+      "expectedAmountConfidence": "ESTIMATED",
+      "maxAmount": 200.00,
+      "maxAmountConfidence": "CONFIRMED_BY_MEMORY",
+      "status": "AWAITING_INFORMATION"
+    }
+  ],
+
+  "externalInstallmentPlans": [],
+
+  "otherEvidence": []
+}

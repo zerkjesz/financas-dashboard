@@ -7,3 +7,7 @@ prisma/generated/
 .vercel
 .env*
 prisma/backup-*.json
+
+# Fase 5.0 — dados financeiros reais do usuário NUNCA versionados.
+scripts/snapshot-input.local.json
+scripts/snapshot-reports/
