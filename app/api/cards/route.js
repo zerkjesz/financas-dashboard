@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { listCardsWithLimits } from "@/lib/cards";
 import { getOrCreateBill } from "@/lib/cardBillCalculator";
 import { deepSerializeMoney } from "@/lib/money";
+import { resolveConfidence, isValidConfidence } from "@/lib/dataConfidence";
 
 export async function GET() {
   const cards = await listCardsWithLimits();
@@ -24,10 +25,13 @@ export async function GET() {
 
 export async function POST(request) {
   const body = await request.json();
-  const { slug, name, accountId, totalLimit, closingDay, dueDay, usedLimit } = body;
+  const { slug, name, accountId, totalLimit, closingDay, dueDay, usedLimit, confidence } = body;
 
   if (!slug || !name || typeof totalLimit !== "number" || typeof dueDay !== "number") {
     return NextResponse.json({ error: "slug, name, totalLimit e dueDay são obrigatórios" }, { status: 400 });
+  }
+  if (confidence != null && !isValidConfidence(confidence)) {
+    return NextResponse.json({ error: `confidence inválida: ${confidence}` }, { status: 400 });
   }
 
   const card = await prisma.card.create({
@@ -36,7 +40,14 @@ export async function POST(request) {
 
   if (typeof usedLimit === "number") {
     await prisma.cardLimitUpdate.create({
-      data: { cardId: card.id, newTotalLimit: totalLimit, newUsedLimit: usedLimit, reportedAvailable: totalLimit - usedLimit, source: "manual" },
+      data: {
+        cardId: card.id,
+        newTotalLimit: totalLimit,
+        newUsedLimit: usedLimit,
+        reportedAvailable: totalLimit - usedLimit,
+        source: "manual",
+        confidence: resolveConfidence(confidence),
+      },
     });
   }
 

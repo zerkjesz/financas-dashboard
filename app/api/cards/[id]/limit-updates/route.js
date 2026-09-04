@@ -1,14 +1,18 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { maxMoney, subtractMoney, money, ZERO, serializeMoney, deepSerializeMoney } from "@/lib/money";
+import { resolveConfidence, isValidConfidence } from "@/lib/dataConfidence";
 
 export async function POST(request, { params }) {
   const { id } = await params;
   const body = await request.json();
-  const { reportedAvailable, newTotalLimit, note } = body;
+  const { reportedAvailable, newTotalLimit, note, confidence } = body;
 
   if (typeof reportedAvailable !== "number") {
     return NextResponse.json({ error: "reportedAvailable inválido" }, { status: 400 });
+  }
+  if (confidence != null && !isValidConfidence(confidence)) {
+    return NextResponse.json({ error: `confidence inválida: ${confidence}` }, { status: 400 });
   }
 
   const card = await prisma.card.findUnique({ where: { id } });
@@ -26,6 +30,7 @@ export async function POST(request, { params }) {
       reportedAvailable,
       note: note || null,
       source: "manual",
+      confidence: resolveConfidence(confidence),
     },
   });
   return NextResponse.json(deepSerializeMoney(limitUpdate), { status: 201 });

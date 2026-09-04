@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { listPurchasesWithProgress } from "@/lib/installments";
 import { generateInstallmentSchedule } from "@/lib/installments";
 import { money, divideMoney, roundMoney, serializeMoney, deepSerializeMoney } from "@/lib/money";
+import { resolveConfidence, isValidConfidence } from "@/lib/dataConfidence";
 
 export async function GET() {
   const purchases = await listPurchasesWithProgress();
@@ -11,10 +12,13 @@ export async function GET() {
 
 export async function POST(request) {
   const body = await request.json();
-  const { description, totalAmount, installmentCount, cardId, category, firstInstallmentMonth, startingInstallmentNumber } = body;
+  const { description, totalAmount, installmentCount, cardId, category, firstInstallmentMonth, startingInstallmentNumber, confidence } = body;
 
   if (!description || typeof totalAmount !== "number" || !installmentCount || !cardId) {
     return NextResponse.json({ error: "description, totalAmount, installmentCount e cardId são obrigatórios" }, { status: 400 });
+  }
+  if (confidence != null && !isValidConfidence(confidence)) {
+    return NextResponse.json({ error: `confidence inválida: ${confidence}` }, { status: 400 });
   }
 
   // Decimal-first na fronteira de entrada (Etapa 8) — mesmo esse cálculo simples
@@ -32,6 +36,7 @@ export async function POST(request) {
       firstInstallmentMonth: firstInstallmentMonth || new Date().toISOString().slice(0, 7),
       startingInstallmentNumber: startingInstallmentNumber || 1,
       source: "manual",
+      confidence: resolveConfidence(confidence),
     },
   });
   await generateInstallmentSchedule(purchase);

@@ -195,6 +195,72 @@ async function auditOrphans() {
   check("Nenhuma Bill pendente presa a RecurringRule inativa", inactiveRuleBills.length === 0, `${inactiveRuleBills.length} encontrada(s)`);
 }
 
+// Fase 3.2 — AppSettings é singleton por construção (id fixo "default" + PK), mas
+// alguém poderia criar uma segunda linha com outro id explícito; esta checagem
+// confirma por evidência (count real), não por confiar na constraint sozinha.
+async function auditAppSettingsSingleton() {
+  const rows = await prisma.appSettings.findMany();
+  check("Existe exatamente um AppSettings", rows.length === 1, `${rows.length} encontrado(s)`);
+  if (rows.length === 0) return;
+
+  const s = rows[0];
+  check(`AppSettings.id === "default"`, s.id === "default", s.id);
+  check(
+    "AppSettings.cycleStartDay é um dia de mês válido (1-31)",
+    Number.isInteger(s.cycleStartDay) && s.cycleStartDay >= 1 && s.cycleStartDay <= 31,
+    String(s.cycleStartDay)
+  );
+  check(
+    "AppSettings.safetyMarginPercent é um percentual não-negativo (Int, não Decimal — não é dinheiro)",
+    Number.isInteger(s.safetyMarginPercent) && s.safetyMarginPercent >= 0,
+    String(s.safetyMarginPercent)
+  );
+  check(
+    "AppSettings.operationalHistoryStart é uma data válida",
+    s.operationalHistoryStart instanceof Date && !Number.isNaN(s.operationalHistoryStart.getTime()),
+    s.operationalHistoryStart?.toISOString?.()
+  );
+  check(
+    "AppSettings.vaHistoryStart é uma data válida",
+    s.vaHistoryStart instanceof Date && !Number.isNaN(s.vaHistoryStart.getTime()),
+    s.vaHistoryStart?.toISOString?.()
+  );
+}
+
+// Fase 3.2 — confirma por introspecção real do schema (não por suposição) que
+// `confidence` só existe nos 7 models aprovados e NÃO foi adicionado aos models
+// explicitamente excluídos (CardBill, Installment, RecurringRule, LegacyTransaction)
+// nem a nenhum outro model — pega uma regressão de escopo se alguém adicionar o
+// campo em outro lugar sem essa checagem ser atualizada de propósito.
+async function auditDataConfidenceScope() {
+  const EXPECTED_WITH_CONFIDENCE = new Set(["Income", "Expense", "Transfer", "BalanceAdjustment", "CardLimitUpdate", "Purchase", "Bill"]);
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT table_name::text AS table_name FROM information_schema.columns WHERE column_name = 'confidence' AND table_schema = 'public'`
+  );
+  const actualWithConfidence = new Set(rows.map((r) => r.table_name));
+  const missing = [...EXPECTED_WITH_CONFIDENCE].filter((m) => !actualWithConfidence.has(m));
+  const unexpected = [...actualWithConfidence].filter((m) => !EXPECTED_WITH_CONFIDENCE.has(m));
+  check(
+    "Coluna `confidence` existe exatamente nos 7 models aprovados (nenhum a mais, nenhum a menos)",
+    missing.length === 0 && unexpected.length === 0,
+    `faltando=${JSON.stringify(missing)}, inesperado=${JSON.stringify(unexpected)}`
+  );
+
+  // Redundante com a garantia do tipo enum do Postgres (um valor fora da lista nem
+  // consegue ser gravado), mas confirmado por evidência de dado real mesmo assim —
+  // mesmo espírito do resto deste script (nunca assumir, sempre checar).
+  const ALLOWED = new Set(["CONFIRMED", "CONFIRMED_BY_MEMORY", "ESTIMATED", "UNCERTAIN", "RECONCILIATION_ADJUSTMENT"]);
+  const distinctValues = await Promise.all(
+    [...EXPECTED_WITH_CONFIDENCE].map(async (model) => {
+      const accessor = model.charAt(0).toLowerCase() + model.slice(1);
+      const distinct = await prisma[accessor].findMany({ distinct: ["confidence"], select: { confidence: true } });
+      return { model, values: distinct.map((d) => d.confidence).filter((v) => v != null) };
+    })
+  );
+  const invalid = distinctValues.flatMap(({ model, values }) => values.filter((v) => !ALLOWED.has(v)).map((v) => `${model}:${v}`));
+  check("Nenhum valor de confidence fora do enum permitido em nenhum dos 7 models", invalid.length === 0, invalid.join(", "));
+}
+
 async function main() {
   console.log("--- Auditoria de consistência (read-only) ---\n");
   await auditAccountBalances();
@@ -205,6 +271,8 @@ async function main() {
   await auditAnticipations();
   await auditMigrationSums();
   await auditOrphans();
+  await auditAppSettingsSingleton();
+  await auditDataConfidenceScope();
 
   console.log(`\n${problems.length === 0 ? "✅ Tudo consistente." : `❌ ${problems.length} divergência(s) encontrada(s).`}`);
   process.exitCode = problems.length === 0 ? 0 : 1;
