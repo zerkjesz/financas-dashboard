@@ -331,6 +331,99 @@ function matchCanonicalExpenses(canonicalExpenses, devExpenses, { tolerance = 0.
 }
 
 // ============================================================================
+// Fase 5.1A, itens 2-3 — resolve cada match AMBIGUOUS_MATCH/NEAR_AMOUNT em
+// DOIS cenários nomeados explícitos (nunca decide silenciosamente qual valor
+// está certo): Cenário A (o valor CANÔNICO está certo — o dev precisaria de
+// UPDATE) e Cenário B (o valor PERSISTIDO está certo — KEEP, a lista
+// canônica tinha um erro de transcrição/arredondamento). Genérico: funciona
+// pra qualquer número de ambiguidades near-amount, não só uma.
+// ============================================================================
+function buildCentLevelScenarios(canonicalExpenses, expenseMatching, { recharge, observedClosing }) {
+  const nearAmountAmbiguities = (expenseMatching?.matches || []).filter((m) => m.classification === "AMBIGUOUS_MATCH" && m.matchType === "NEAR_AMOUNT");
+  if (nearAmountAmbiguities.length === 0) return { status: "NO_CENT_LEVEL_AMBIGUITY" };
+
+  function computeScenario(expensesOverride) {
+    const total = sumMoney(expensesOverride.map((e) => money(e.amount)));
+    const netMovements = subtractMoney(money(recharge), total);
+    const derivedOpening = addMoney(subtractMoney(money(observedClosing), money(recharge)), total);
+    const checksum = subtractMoney(addMoney(derivedOpening, money(recharge)), total);
+    return {
+      canonicalExpensesTotal: total.toString(),
+      derivedOpeningBalanceVA: derivedOpening.toString(),
+      finalChecksum: { formula: `${derivedOpening.toString()} + ${money(recharge).toString()} - ${total.toString()} = ${checksum.toString()}`, target: money(observedClosing).toString(), matches: compareMoney(checksum, money(observedClosing)) === 0 },
+    };
+  }
+
+  const scenarios = nearAmountAmbiguities.map((amb) => {
+    const canonicalAmount = money(amb.amount);
+    const devAmount = money(amb.matchedDevAmount);
+
+    const scenarioACanonicalCorrect = canonicalExpenses; // já usa o valor canônico como está.
+    const scenarioBDevCorrect = canonicalExpenses.map((e) => (e.counterparty === amb.counterparty && e.date === amb.date ? { ...e, amount: Number(devAmount.toString()) } : e));
+
+    return {
+      item: { date: amb.date, counterparty: amb.counterparty, canonicalAmount: canonicalAmount.toString(), persistedDevAmount: devAmount.toString(), delta: amb.delta, matchedDevExpenseId: amb.matchedDevExpenseId },
+      scenarioA_canonicalIsCorrect: {
+        description: `R$${canonicalAmount.toString()} (canônico) está correto`,
+        ...computeScenario(scenarioACanonicalCorrect),
+        devExpenseAction: `UPDATE amount ${devAmount.toString()} -> ${canonicalAmount.toString()} (id=${amb.matchedDevExpenseId}) — NÃO é KEEP neste cenário.`,
+      },
+      scenarioB_devIsCorrect: {
+        description: `R$${devAmount.toString()} (persistido no dev) está correto`,
+        ...computeScenario(scenarioBDevCorrect),
+        devExpenseAction: `KEEP (id=${amb.matchedDevExpenseId}, amount=${devAmount.toString()}) — a lista canônica tinha um erro de transcrição/arredondamento neste item.`,
+      },
+    };
+  });
+
+  return {
+    status: "UNRESOLVED_CENT_LEVEL_DEPENDENCY",
+    ambiguities: scenarios,
+    note: "O manifesto NÃO pode aprovar uma âncora de abertura (opening anchor) enquanto esta dependência não for resolvida pelo usuário — ver VA_OPENING_ANCHOR=UNRESOLVED_CENT_LEVEL_DEPENDENCY no manifesto final.",
+  };
+}
+
+// ============================================================================
+// Fase 5.1A, itens 6-9 — reconstrói o ledger OPERACIONAL do Itaú entre
+// operationalHistoryStart (24/08) e checkpointA (04/09), a partir de uma
+// lista de movimentos candidatos (evidência conversacional anterior — valores
+// e ordem aproximada, NUNCA datas exatas inventadas). Classifica cada
+// movimento semanticamente (nunca tudo vira Expense) e deriva o opening
+// balance operacional — sempre DERIVED_ONLY, nunca confundido com saldo
+// comprovado por extrato.
+// ============================================================================
+function reconcileItauOperationalLedger(operationalHistoryEvidence, { checkpointA, operationalHistoryStart }) {
+  if (!operationalHistoryEvidence?.operationalLedgerCandidates) return { status: "NOT_PROVIDED" };
+
+  const movements = operationalHistoryEvidence.operationalLedgerCandidates.map((m) => ({ ...m, amountMoney: money(m.amount) }));
+  const netOperationalMovements = sumMoney(movements.map((m) => m.amountMoney));
+  const derivedOpeningBalanceItau = subtractMoney(money(checkpointA), netOperationalMovements);
+
+  const semanticBreakdown = {};
+  for (const m of movements) {
+    semanticBreakdown[m.semanticHint] = addMoney(semanticBreakdown[m.semanticHint] ?? ZERO, m.amountMoney);
+  }
+
+  const evidenced20Aug = operationalHistoryEvidence.evidenced20Aug;
+  const gapVsEvidenced20Aug = evidenced20Aug ? subtractMoney(derivedOpeningBalanceItau, money(evidenced20Aug.amount)) : null;
+
+  return {
+    status: "PROVIDED",
+    operationalHistoryStart: operationalHistoryStart?.toISOString?.() ?? operationalHistoryStart,
+    checkpointA: money(checkpointA).toString(),
+    movements: movements.map((m) => ({ amount: m.amountMoney.toString(), description: m.description, semanticHint: m.semanticHint, note: m.note ?? null, settlesPlan: m.settlesPlan ?? null, settlesPlans: m.settlesPlans ?? null, settlesCardBillCycleMonth: m.settlesCardBillCycleMonth ?? null })),
+    netOperationalMovements: netOperationalMovements.toString(),
+    semanticBreakdown: Object.fromEntries(Object.entries(semanticBreakdown).map(([k, v]) => [k, v.toString()])),
+    derivedOpeningBalanceItau: derivedOpeningBalanceItau.toString(),
+    openingBalanceEvidence: "DERIVED_ONLY",
+    datesNote: operationalHistoryEvidence.datesNote || "Datas individuais não fornecidas com confiança suficiente — apenas valor e ordem aproximada são evidência.",
+    evidenced20Aug: evidenced20Aug ?? null,
+    gapVsEvidenced20Aug: gapVsEvidenced20Aug?.toString() ?? null,
+    gapNote: gapVsEvidenced20Aug != null ? "Diferença entre o derived opening (24/08) e o saldo evidenciado em 20/08 — fora do cutoff operacional, NÃO preenchida com movimentos inventados entre 21-23/08." : null,
+  };
+}
+
+// ============================================================================
 // K/L/M — ledger da conta restrita: recharge -> observedClosing.
 //
 // Fase 5.0.1, item 1 — CORREÇÃO CONCEITUAL: o valor da recarga NUNCA é o
@@ -652,6 +745,51 @@ function confirmCardBillUniqueConstraint() {
 }
 
 // ============================================================================
+// Fase 5.1A, item 12 — lê lib/externalInstallments.js (read-only, só leitura
+// de arquivo) e confirma por evidência de código (não por suposição) a
+// semântica real de settlement: (A) markExternalInstallmentPaid cria
+// Expense? (B) ExternalInstallment é só obligation-state? (C) como o saldo
+// da conta é reduzido? (D) qual a relação Expense<->ExternalInstallment?
+// ============================================================================
+function auditExternalInstallmentSettlementSemantics() {
+  const libPath = path.join(HERE, "..", "lib", "externalInstallments.js");
+  const source = fs.readFileSync(libPath, "utf8");
+  const markPaidMatch = source.match(/export async function markExternalInstallmentPaid[\s\S]*?\n}/);
+  const markPaidBody = markPaidMatch ? markPaidMatch[0] : "";
+
+  const createsExpenseInsideMarkPaid = /tx\.expense\.create|prisma\.expense\.create/.test(markPaidBody);
+  const expenseIdIsOptionalParam = /\{\s*expenseId,\s*paidAt\s*\}\s*=\s*\{\}/.test(markPaidBody) || /expenseId\s*\|\|\s*null/.test(markPaidBody);
+  const statusFieldOnly = /data:\s*\{\s*status:\s*"PAID",\s*paidAt:.*expenseId:/.test(markPaidBody.replace(/\s+/g, " "));
+
+  const schemaPath = path.join(HERE, "..", "prisma", "schema.prisma");
+  const schemaText = fs.readFileSync(schemaPath, "utf8");
+  const modelMatch = schemaText.match(/model ExternalInstallment \{[\s\S]*?\n\}/);
+  const expenseIdUnique = /expenseId\s+String\?\s+@unique/.test(modelMatch?.[0] ?? "");
+
+  return {
+    sourceFile: "lib/externalInstallments.js",
+    question_A_marksPaidAlsoCreatesExpense: createsExpenseInsideMarkPaid,
+    evidence_A: createsExpenseInsideMarkPaid
+      ? "markExternalInstallmentPaid CRIA um Expense internamente."
+      : "markExternalInstallmentPaid NÃO cria Expense — só ATUALIZA a própria ExternalInstallment (status: 'PAID', paidAt, expenseId) via prisma.externalInstallment, sem tocar em Expense. `expenseId` é OPCIONAL e vem de fora (o caller já deve ter criado o Expense antes, se aplicável).",
+    question_B_isOnlyObligationState: statusFieldOnly,
+    evidence_B: "O update só toca `status`/`paidAt`/`expenseId` — nenhum campo monetário de saldo é lido/escrito aqui. ExternalInstallment é puramente estado de obrigação (PENDING/PAID), nunca a fonte do efeito de caixa.",
+    question_C_howAccountBalanceIsReduced: "Via Expense normal (lib/accounts.js:computeAccountBalance soma Expense por accountId/occurredAt) — o mesmo mecanismo de QUALQUER outro gasto. externalInstallments.js não implementa nenhuma lógica de saldo própria.",
+    question_D_relationshipExpenseToExternalInstallment: {
+      expenseIdOptional: expenseIdIsOptionalParam,
+      expenseIdUniqueInSchema: expenseIdUnique,
+      relationship: "1:1 OPCIONAL — um Expense pode estar linkado a NO MÁXIMO uma ExternalInstallment (constraint @unique), mas uma ExternalInstallment pode estar PAID com expenseId=null (documentado no schema pra parcela paga antes do início do histórico operacional).",
+    },
+    conclusion: {
+      canRepresentOnePaymentSettlingMultipleInstallments: true,
+      how:
+        "Quando UM pagamento real (ex: pix de R$1.050,59) quita a parcela corrente de VÁRIOS planos simultaneamente, o schema já suporta isso SEM alteração: criar UM Expense (o fato de caixa, uma vez só) e linkar `expenseId` em NO MÁXIMO UMA das ExternalInstallment correspondentes (a constraint @unique não permite mais que isso) — as OUTRAS ficam PAID com expenseId=null, exatamente como o schema já permite pra pagamentos pré-histórico operacional. Isso evita: débito duplicado (Expense criado só 1x), Expense duplicado (idem), e parcela pendente (todas ficam PAID independentemente do link).",
+      noSchemaChangeNeeded: true,
+    },
+  };
+}
+
+// ============================================================================
 // Auditoria read-only da(s) Purchase existente(s) contra os valores de fatura
 // conhecidos (item 5 do pedido). Genérica: cruza QUALQUER Purchase do cartão
 // informado contra QUALQUER known bill do input — não assume nada sobre
@@ -925,9 +1063,66 @@ async function reconcileCard(cardInput, csvAudit) {
     cardBillUniqueConstraint: confirmCardBillUniqueConstraint(),
     persistedCardBillsInDb: persistedBills,
     persistedCardBillsClassified: classifiedBills,
+    cardBillManifestById: buildCardBillManifestById(knownBills, classifiedBills),
     purchaseAudit,
     currentCardCreditBalanceAssumption: "R$0,00 — nenhuma evidência de saldo credor atual informada neste snapshot.",
   };
+}
+
+// ============================================================================
+// Fase 5.1A, item 14 — manifesto CardBill por id, pra TODAS as CardBills
+// persistidas: current (total/paid/status/remaining), canonical (total/paid/
+// status, se conhecido), proposedAction e contamination risk. Nunca propõe
+// CREATE onde já existe row única (cardId+cycleMonth) — a constraint garante
+// isso, então toda correção de ciclo já persistido é necessariamente UPDATE.
+// ============================================================================
+function buildCardBillManifestById(knownBills, classifiedBills) {
+  const knownByMonth = new Map(knownBills.map((b) => [b.cycleMonth, b]));
+
+  return classifiedBills.map((cb) => {
+    const known = knownByMonth.get(cb.cycleMonth) ?? null;
+    const canonicalTotal = known ? known.amountMoney.toString() : null;
+    const canonicalStatus = known ? (known.status === "PAID" ? "paid" : "open") : null;
+    const canonicalPaidAmount = known ? (known.status === "PAID" ? known.amountMoney.toString() : "0.00") : null;
+
+    let proposedAction;
+    let reason;
+    if (cb.classification === "CLEAR_ARTIFACT_CANDIDATE") {
+      proposedAction = "DELETE_ARTIFACT_CANDIDATE";
+      reason = cb.reasoning;
+    } else if (cb.classification === "UNKNOWN") {
+      proposedAction = "DEFER_UNKNOWN";
+      reason = cb.reasoning;
+    } else if (known == null) {
+      proposedAction = "DEFER_UNKNOWN";
+      reason = "Sem valor canônico conhecido pra este ciclo — não é possível propor KEEP nem UPDATE com confiança.";
+    } else {
+      const totalMatches = compareMoney(money(cb.totalAmount), money(canonicalTotal)) === 0;
+      const statusMatches = cb.status === canonicalStatus;
+      const paidMatches = compareMoney(money(cb.paidAmount ?? 0), money(canonicalPaidAmount)) === 0;
+      if (totalMatches && statusMatches && paidMatches) {
+        proposedAction = "KEEP";
+        reason = "totalAmount, status e paidAmount persistidos já batem exatamente com os valores canônicos conhecidos.";
+      } else {
+        proposedAction = "UPDATE";
+        const diffs = [];
+        if (!totalMatches) diffs.push(`totalAmount ${cb.totalAmount} -> ${canonicalTotal}`);
+        if (!statusMatches) diffs.push(`status ${cb.status} -> ${canonicalStatus}`);
+        if (!paidMatches) diffs.push(`paidAmount ${cb.paidAmount ?? "null"} -> ${canonicalPaidAmount}`);
+        reason = `Diverge do canônico em: ${diffs.join(", ")}. Constraint @@unique([cardId, cycleMonth]) garante que esta é a ÚNICA row possível pra este ciclo — a correção é OBRIGATORIAMENTE um UPDATE, nunca um CREATE.`;
+      }
+    }
+
+    return {
+      id: cb.id,
+      cycleMonth: cb.cycleMonth,
+      current: { totalAmount: cb.totalAmount, paidAmount: cb.paidAmount, status: cb.status, remainingAmount: cb.remainingAmount },
+      canonical: known ? { totalAmount: canonicalTotal, paidAmount: canonicalPaidAmount, status: canonicalStatus } : { status: "UNKNOWN" },
+      proposedAction,
+      reason,
+      contaminationRisk: cb.wouldContaminateEngineIfLeftAsIs,
+    };
+  });
 }
 
 // ============================================================================
@@ -2025,6 +2220,538 @@ function buildPotentialLastResortMutations(checkingRecon, vaRecon) {
 }
 
 // ============================================================================
+// Fase 5.1A, item 25 — MANIFESTO FINAL DE APPLY, formato estrito por entrada:
+// sequence, operation, model, existingRecordId, naturalKey, before, after,
+// amountEffectOnAccount, amountEffectOnLiability, source, confidence, reason,
+// dependency, idempotencyCheck, rollbackStrategy, status. AINDA NÃO EXECUTADO
+// — só a estrutura exata que a Fase 5.1B vai seguir. Faz leituras read-only no
+// banco (nunca escreve) pra resolver ids reais de dedup — nunca assume dedup
+// só por VALOR (achado desta fase: várias Expenses de R$50 já existem no
+// Itaú por motivos completamente diferentes — gasolina, cabelo, pix pra
+// terceiros —, então dedup por valor sozinho seria falso-positivo; dedup
+// exige valor + data + proximidade de descrição).
+// ============================================================================
+async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger, centLevelScenarios } = {}) {
+  const entries = [];
+  let seq = 0;
+  const push = (e) => {
+    seq += 1;
+    entries.push({ sequence: seq, dependency: [], idempotencyCheck: "N/A", rollbackStrategy: "N/A", ...e });
+    return seq;
+  };
+
+  const itauAccount = input.checkingAccount?.slug ? await prisma.account.findUnique({ where: { slug: input.checkingAccount.slug } }) : null;
+  const vaAccount = input.restrictedAccount?.slug ? await prisma.account.findUnique({ where: { slug: input.restrictedAccount.slug } }) : null;
+  const cardRow = input.card?.slug ? await prisma.card.findUnique({ where: { slug: input.card.slug } }) : null;
+
+  const seqPreflight = push({
+    operation: "PREFLIGHT",
+    model: "N/A",
+    existingRecordId: null,
+    naturalKey: "N/A",
+    before: "N/A",
+    after: "N/A",
+    amountEffectOnAccount: null,
+    amountEffectOnLiability: null,
+    source: "N/A",
+    confidence: "N/A",
+    reason: "Ver buildPreflightAssertions() — deve rodar e passar 100% antes de qualquer item abaixo ser executado pela Fase 5.1B.",
+    rollbackStrategy: "Abortar o script inteiro antes de qualquer write.",
+    status: "APPROVED_CANDIDATE",
+  });
+
+  // --- Card.closingDay ---
+  let seqClosingDay = seqPreflight;
+  if (cardRow && input.card?.closingDay != null) {
+    const same = cardRow.closingDay === input.card.closingDay;
+    seqClosingDay = push({
+      operation: same ? "KEEP" : "UPDATE",
+      model: "Card",
+      existingRecordId: cardRow.id,
+      naturalKey: `slug=${input.card.slug}`,
+      before: { closingDay: cardRow.closingDay },
+      after: { closingDay: input.card.closingDay },
+      amountEffectOnAccount: null,
+      amountEffectOnLiability: null,
+      source: "input do usuário (dado bancário direto)",
+      confidence: "CONFIRMED",
+      reason: same ? "closingDay já está correto — nenhuma mudança." : "closingDay real confirmado (dia 4) — necessário pra closesAt/dueAt corretos das CardBills; rows já persistidas mantêm seu closesAt/dueAt já gravado (não recomputam sozinhas), então este UPDATE por si só não corrige retroativamente closesAt/dueAt já persistidos — só ciclos futuros.",
+      dependency: [seqPreflight],
+      idempotencyCheck: `Card.findUnique({ where: { slug: '${input.card.slug}' } }).closingDay === ${input.card.closingDay}`,
+      rollbackStrategy: `UPDATE Card SET closingDay = ${JSON.stringify(cardRow.closingDay)} WHERE id='${cardRow.id}'`,
+      status: "APPROVED_CANDIDATE",
+    });
+  }
+
+  // --- CardBill manifest por id (item 14), reshapeado pro formato estrito ---
+  for (const cb of cardRecon?.cardBillManifestById || []) {
+    const statusMap = { KEEP: "APPROVED_CANDIDATE", UPDATE: "APPROVED_CANDIDATE", DELETE_ARTIFACT_CANDIDATE: "DELETE_ARTIFACT_CANDIDATE", DEFER_UNKNOWN: "DEFER" };
+    if (cb.proposedAction === "KEEP") continue; // sem mutação real a listar
+    push({
+      operation: cb.proposedAction === "DELETE_ARTIFACT_CANDIDATE" ? "DELETE" : cb.proposedAction === "DEFER_UNKNOWN" ? "DEFER" : "UPDATE",
+      model: "CardBill",
+      existingRecordId: cb.id,
+      naturalKey: `cardId=${cardRow?.id ?? "?"}, cycleMonth=${cb.cycleMonth}`,
+      before: cb.current,
+      after: cb.proposedAction === "UPDATE" ? cb.canonical : "N/A",
+      amountEffectOnAccount: null,
+      amountEffectOnLiability: cb.proposedAction === "UPDATE" ? `liability do ciclo ${cb.cycleMonth}: ${cb.current.totalAmount} -> ${cb.canonical.totalAmount}` : null,
+      source: "input do usuário (fatura real) cruzado com achado desta auditoria",
+      confidence: cb.proposedAction === "UPDATE" ? "CONFIRMED" : "UNCERTAIN",
+      reason: cb.reason,
+      dependency: [seqClosingDay],
+      idempotencyCheck: `CardBill.findUnique({ where: { id: '${cb.id}' } })` + (cb.proposedAction === "UPDATE" ? ` já tem totalAmount=${cb.canonical.totalAmount} && status='${cb.canonical.status}'` : ""),
+      rollbackStrategy: cb.proposedAction === "UPDATE" ? `UPDATE de volta para totalAmount=${cb.current.totalAmount}, paidAmount=${cb.current.paidAmount}, status='${cb.current.status}'` : cb.proposedAction === "DELETE_ARTIFACT_CANDIDATE" ? "Recriar a row com os mesmos valores (id novo — CUIDADO: perde o id original; preferir soft-verificação antes de deletar de fato)" : "N/A",
+      status: statusMap[cb.proposedAction] ?? "DEFER",
+    });
+  }
+
+  // --- Item 15: pagamento de fatura de cartão dentro do lote operacional ---
+  // Genérico: encontra QUALQUER movimento com settlesCardBillCycleMonth no
+  // lote de operationalHistoryEvidence (nunca hardcoda um ciclo/valor
+  // específico) — faz parte de um lote sem data individual confirmada, então
+  // NÃO é proposto pra criação nesta fase (criar exigiria inventar
+  // occurredAt). É representado, por ora, só de forma agregada em
+  // netOperationalMovements (ver N2/item 6-9).
+  const cardBillPaymentMovement = (input.checkingAccount?.operationalHistoryEvidence?.operationalLedgerCandidates || []).find((m) => m.settlesCardBillCycleMonth);
+  if (cardBillPaymentMovement) {
+    const paymentCycle = cardBillPaymentMovement.settlesCardBillCycleMonth;
+    const paymentAmountAbs = money(cardBillPaymentMovement.amount).abs().toString();
+    const targetCardBillId = cardRecon?.cardBillManifestById?.find((cb) => cb.cycleMonth === paymentCycle)?.id ?? null;
+    push({
+      operation: "DEFER",
+      model: "Transfer (kind=card_bill_payment)",
+      existingRecordId: null,
+      naturalKey: `cardBillId=${targetCardBillId ?? "?"} (cycleMonth=${paymentCycle})`,
+      before: "N/A — nenhum Transfer de pagamento de fatura persistido pra este ciclo",
+      after: `SE/QUANDO a data exata for confirmada: Transfer{ fromAccountId: '${itauAccount?.id ?? "<itau>"}', toCardId: '${cardRow?.id ?? "<card>"}', cardBillId: '${targetCardBillId ?? `<cardbill de ${paymentCycle}, após seu UPDATE>`}', kind: 'card_bill_payment', amount: ${paymentAmountAbs}, occurredAt: <DATA EXATA AINDA NÃO CONFIRMADA> } — explicitamente NÃO um Expense.`,
+      amountEffectOnAccount: `-${paymentAmountAbs} (Itaú) — já incluído agregadamente em netOperationalMovements (ver N2), não seria um efeito NOVO se este Transfer fosse criado depois, só tornaria explícito/datado um efeito já contado no agregado.`,
+      amountEffectOnLiability: `Settle da liability do ciclo ${paymentCycle} — já refletido separadamente pelo UPDATE de CardBill (id acima) com paidAmount=${paymentAmountAbs}/status=paid.`,
+      source: "operationalHistoryEvidence — lote de movimentos operacionais",
+      confidence: "CONFIRMED (valor e fato) / UNKNOWN (data exata)",
+      reason:
+        "Representar isto como Transfer real exigiria um occurredAt específico, que não está confirmado individualmente (só a janela do lote). Criar com uma data escolhida seria inventar dado, proibido explicitamente. O lado da OBRIGAÇÃO (CardBill) já é resolvido pelo UPDATE correspondente (natural key by cardId+cycleMonth, nunca duplica); o lado do CAIXA fica corretamente registrado apenas de forma agregada (netOperationalMovements) até a data exata ser confirmada.",
+      dependency: [seqClosingDay],
+      idempotencyCheck: "N/A — não proposto pra execução nesta fase.",
+      rollbackStrategy: "N/A",
+      status: "DEFER",
+    });
+  }
+
+  // --- Item 5/17: reclassificação de Income entre contas — UPDATE Income.accountId (fato já existe, nunca cria um novo) ---
+  for (const r of input.reclassifiedIncomes || []) {
+    const existing = vaAccount
+      ? await prisma.income.findFirst({ where: { accountId: vaAccount.id, amount: money(r.amount).toNumber(), description: r.description } })
+      : null;
+    push({
+      operation: existing ? "UPDATE" : "BLOCKED",
+      model: "Income",
+      existingRecordId: existing?.id ?? null,
+      naturalKey: `accountId=${vaAccount?.id ?? "?"}, amount=${r.amount}, description="${r.description}"`,
+      before: existing ? { accountId: existing.accountId, occurredAt: existing.occurredAt.toISOString() } : "NÃO ENCONTRADO — reference não localizada por valor+descrição exatos",
+      after: existing ? { accountId: itauAccount?.id ?? "<itau>" } : "N/A",
+      amountEffectOnAccount: `VA: -${money(r.amount).toString()}; Itaú: +${money(r.amount).toString()} — SEM mudança no totalBalances agregado (é reclassificação, não fato novo)`,
+      amountEffectOnLiability: null,
+      source: r.source,
+      confidence: r.confidence,
+      reason: r.note || "Evidência conversacional anterior confirma que este Income pertence à conta irrestrita, não à restrita.",
+      dependency: [seqPreflight],
+      idempotencyCheck: existing ? `Income.findUnique({ where: { id: '${existing.id}' } }).accountId === '${itauAccount?.id}'` : "N/A",
+      rollbackStrategy: existing ? `UPDATE Income.accountId de volta para '${vaAccount?.id}'` : "N/A",
+      status: existing ? "APPROVED_CANDIDATE" : "BLOCKED",
+    });
+  }
+
+  // --- movementsAfterCheckpointA (férias/CNPJ/namorada) — dedup real por
+  // valor + data (NUNCA só valor — achado desta fase: 10 Expenses de R$50 já
+  // existem no Itaú por razões completamente diferentes). ---
+  for (const m of input.checkingAccount?.movementsAfterCheckpointA || []) {
+    const dateOnly = m.date;
+    let dup = null;
+    let allByAmount = [];
+    if (itauAccount) {
+      if (m.type === "INFLOW") {
+        allByAmount = await prisma.income.findMany({ where: { accountId: itauAccount.id, amount: money(m.amount).toNumber() } });
+      } else if (m.type === "TRANSFER_OUT_EXTERNAL") {
+        allByAmount = await prisma.transfer.findMany({ where: { fromAccountId: itauAccount.id, amount: money(m.amount).toNumber() } });
+      } else {
+        allByAmount = await prisma.expense.findMany({ where: { accountId: itauAccount.id, amount: money(m.amount).toNumber() } });
+      }
+      dup = allByAmount.find((c) => c.occurredAt.toISOString().slice(0, 10) === dateOnly) ?? null;
+    }
+    const dedupNote = `Encontrado(s) ${allByAmount.length} registro(s) com o MESMO VALOR no Itaú (dedup por valor sozinho seria falso-positivo — ver ids: ${allByAmount.map((c) => c.id).join(", ") || "nenhum"}); ${dup ? `MAS um deles bate também na MESMA DATA (${dateOnly}): id=${dup.id} — tratado como possível duplicata real.` : `NENHUM bate também na mesma data (${dateOnly}) — nenhuma duplicata real encontrada.`}`;
+
+    if (m.type === "INFLOW") {
+      push({
+        operation: dup ? "BLOCKED" : "CREATE",
+        model: "Income",
+        existingRecordId: dup?.id ?? null,
+        naturalKey: `accountId=${itauAccount?.id ?? "?"}, amount=${m.amount}, occurredAt=${dateOnly}`,
+        before: "N/A",
+        after: dup ? "N/A — revisar antes de criar, possível duplicata" : { accountId: itauAccount?.id ?? "<itau>", amount: money(m.amount).toString(), occurredAt: m.date, description: m.description, isRecurring: false, recurringRuleId: null },
+        amountEffectOnAccount: `Itaú: +${money(m.amount).toString()}`,
+        amountEffectOnLiability: null,
+        source: "input do usuário",
+        confidence: m.movementConfidence,
+        reason: `${dedupNote} NÃO vincular a nenhuma RecurringRule (é receita atípica, não o salário mensal).`,
+        dependency: [seqPreflight],
+        idempotencyCheck: dedupNote,
+        rollbackStrategy: "DELETE do Income criado (por id retornado no momento da criação)",
+        status: dup ? "BLOCKED" : "APPROVED_CANDIDATE",
+      });
+    } else if (m.type === "TRANSFER_OUT_EXTERNAL") {
+      push({
+        operation: dup ? "BLOCKED" : "CREATE",
+        model: "Transfer",
+        existingRecordId: dup?.id ?? null,
+        naturalKey: `fromAccountId=${itauAccount?.id ?? "?"}, amount=${m.amount}, occurredAt=${dateOnly}`,
+        before: "N/A",
+        after: dup ? "N/A — revisar antes de criar, possível duplicata" : { fromAccountId: itauAccount?.id ?? "<itau>", toAccountId: null, toCardId: null, kind: "external_transfer", amount: money(m.amount).toString(), occurredAt: m.date, description: m.description },
+        amountEffectOnAccount: `Itaú: -${money(m.amount).toString()}`,
+        amountEffectOnLiability: null,
+        source: "input do usuário",
+        confidence: m.movementConfidence,
+        reason: `${dedupNote} NÃO criar Account nova pro CNPJ, NÃO criar Reserve pessoal — dinheiro já saiu fisicamente (ver auditTransferSchemaForExternalScope, seção R).`,
+        dependency: [seqPreflight],
+        idempotencyCheck: dedupNote,
+        rollbackStrategy: "DELETE do Transfer criado (por id retornado no momento da criação)",
+        status: dup ? "BLOCKED" : "APPROVED_CANDIDATE",
+      });
+    } else if (m.economicClassification === "EXPENSE" && m.economicClassificationConfidence === "CONFIRMED") {
+      push({
+        operation: dup ? "BLOCKED" : "CREATE",
+        model: "Expense",
+        existingRecordId: dup?.id ?? null,
+        naturalKey: `accountId=${itauAccount?.id ?? "?"}, amount=${m.amount}, occurredAt=${dateOnly}`,
+        before: "N/A",
+        after: dup ? "N/A — revisar antes de criar, possível duplicata" : { accountId: itauAccount?.id ?? "<itau>", amount: money(m.amount).toString(), occurredAt: m.date, description: m.description, category: "Outros (revisar taxonomia existente antes de escolher)" },
+        amountEffectOnAccount: `Itaú: -${money(m.amount).toString()}`,
+        amountEffectOnLiability: null,
+        source: "input do usuário (confirmação explícita)",
+        confidence: m.economicClassificationConfidence,
+        reason: dedupNote,
+        dependency: [seqPreflight],
+        idempotencyCheck: dedupNote,
+        rollbackStrategy: "DELETE do Expense criado (por id retornado no momento da criação)",
+        status: dup ? "BLOCKED" : "APPROVED_CANDIDATE",
+      });
+    }
+  }
+
+  // --- Item 20: renda recorrente principal — CREATE RecurringRule + LINK Income existente ---
+  let seqRecurringRule = null;
+  if (input.mainIncome && itauAccount) {
+    const existingRule = await prisma.recurringRule.findFirst({ where: { kind: "income", accountId: itauAccount.id } });
+    const hasStandardAmount = input.mainIncome.standardRecurringAmountConfidence != null && input.mainIncome.standardRecurringAmount != null;
+    seqRecurringRule = push({
+      operation: existingRule ? "KEEP" : "CREATE",
+      model: "RecurringRule",
+      existingRecordId: existingRule?.id ?? null,
+      naturalKey: `kind=income, accountId=${itauAccount.id}, dayOfMonth=${input.mainIncome.dayOfMonth}`,
+      before: existingRule ? existingRule : "N/A — nenhuma RecurringRule de renda existe hoje para a conta irrestrita (verificado: a única RecurringRule kind=income hoje é a recarga do VA, conta diferente)",
+      after: existingRule ? "sem mudança" : { name: "Salário", kind: "income", dayOfMonth: input.mainIncome.dayOfMonth, accountId: itauAccount.id, amount: hasStandardAmount ? money(input.mainIncome.standardRecurringAmount).toString() : null },
+      amountEffectOnAccount: null,
+      amountEffectOnLiability: null,
+      source: "input do usuário",
+      confidence: input.mainIncome.confidence,
+      reason: "Formaliza a renda principal, hoje invisível pro Financial Engine (cai em FALLBACK sem RecurringRule). amount é o PADRÃO/BASE — o valor REAL de cada ocorrência pode ser maior (horas extras) e é registrado no Income individual, não aqui.",
+      dependency: [seqPreflight],
+      idempotencyCheck: `RecurringRule.findFirst({ where: { kind:'income', accountId:'${itauAccount.id}' } }) !== null`,
+      rollbackStrategy: existingRule ? "N/A" : "DELETE da RecurringRule criada (por id retornado no momento da criação) — verificar antes que nenhum Income já tenha sido linkado a ela",
+      status: "APPROVED_CANDIDATE",
+    });
+
+    const salaryOccurrence = await prisma.income.findFirst({
+      where: { accountId: itauAccount.id, amount: money(input.mainIncome.amount).toNumber(), recurringOccurrenceDate: null },
+      orderBy: { occurredAt: "asc" },
+    });
+    push({
+      operation: salaryOccurrence ? "LINK" : "BLOCKED",
+      model: "Income.recurringOccurrenceDate",
+      existingRecordId: salaryOccurrence?.id ?? null,
+      naturalKey: `accountId=${itauAccount.id}, amount=${input.mainIncome.amount}, recurringOccurrenceDate=${input.mainIncome.date}`,
+      before: salaryOccurrence ? { recurringRuleId: salaryOccurrence.recurringRuleId, recurringOccurrenceDate: salaryOccurrence.recurringOccurrenceDate, occurredAt: salaryOccurrence.occurredAt.toISOString() } : "NÃO ENCONTRADO",
+      after: salaryOccurrence ? { recurringRuleId: "<id da RecurringRule acima>", recurringOccurrenceDate: input.mainIncome.date } : "N/A",
+      amountEffectOnAccount: null,
+      amountEffectOnLiability: null,
+      source: "input do usuário",
+      confidence: input.mainIncome.confidence,
+      reason:
+        "Vincula a ocorrência de 24/08 JÁ PERSISTIDA à RecurringRule — NUNCA cria um Income novo pra essa mesma ocorrência (evitaria duplicar R$4.937,18 na renda). Nota: occurredAt desta row (data em que foi REGISTRADA) pode diferir de recurringOccurrenceDate (qual ocorrência AGENDADA ela cumpre) — são campos com semânticas diferentes por desenho do schema.",
+      dependency: [seqRecurringRule],
+      idempotencyCheck: salaryOccurrence ? `Income.findUnique({ where: { id: '${salaryOccurrence.id}' } }).recurringOccurrenceDate === '${input.mainIncome.date}'` : "N/A",
+      rollbackStrategy: salaryOccurrence ? `UPDATE Income SET recurringRuleId=null, recurringOccurrenceDate=null WHERE id='${salaryOccurrence.id}'` : "N/A",
+      status: salaryOccurrence ? "APPROVED_CANDIDATE" : "BLOCKED",
+    });
+  }
+
+  // --- Item 6/9: 9 planos de parcela externa — BLOQUEADO por firstDueDate
+  // NOT NULL no schema, quando só o timing GERAL é conhecido (nunca a data
+  // exata do primeiro vencimento) — achado desta fase, não presente nas
+  // fases anteriores (que não tinham checado esta constraint específica). ---
+  const planCount = await prisma.externalInstallmentPlan.count();
+  for (const p of input.externalInstallmentPlans || []) {
+    const remaining = p.installmentCount - p.paidInstallments;
+    if (remaining <= 0) continue;
+    push({
+      operation: "BLOCKED",
+      model: "ExternalInstallmentPlan + ExternalInstallment",
+      existingRecordId: null,
+      naturalKey: `description="${p.description}"`,
+      before: "N/A",
+      after: `SE desbloqueado: ExternalInstallmentPlan{ description:'${p.description}', creditor:<confirmar>, installmentValue:${money(p.installmentValue).toString()}, installmentCount:${p.installmentCount}, firstDueDate:<BLOQUEADO> } + ${p.paidInstallments} ExternalInstallment(s) status=PAID com paidAt=null e expenseId=null (convenção já suportada pelo schema pra parcela paga antes do início do histórico operacional — ver P3) + ${remaining} PENDING`,
+      amountEffectOnAccount: null,
+      amountEffectOnLiability: `+${money(p.installmentValue).toString()} por parcela PENDING restante (${remaining}x)`,
+      source: p.source,
+      confidence: p.confidence,
+      reason: `ExternalInstallmentPlan.firstDueDate é NOT NULL no schema, mas só o timing GERAL é conhecido (${input.externalInstallmentsPaymentTiming?.paymentTiming ?? "UNKNOWN"}), não a data exata do primeiro vencimento — setar qualquer data específica aqui seria inventar dado. Posição atual (paidInstallments/installmentCount) está CONFIRMADA e pronta pra uso assim que uma data (ou uma convenção explicitamente aprovada pelo usuário, ex: 'usar o dia do salário como estimativa marcada') for fornecida.`,
+      dependency: [seqPreflight],
+      idempotencyCheck: `ExternalInstallmentPlan.count() atualmente = ${planCount} (nenhum plano existente ainda — confirmado)`,
+      rollbackStrategy: "N/A — não proposto pra execução nesta fase",
+      status: "BLOCKED",
+    });
+  }
+
+  // --- Itens 2-3 (VA opening anchor) e 6-9 (Itaú opening) e checkpoint delta ---
+  const centAmb = centLevelScenarios?.ambiguities?.[0] ?? null;
+  push({
+    operation: "OPENING_ANCHOR_CANDIDATE",
+    model: "BalanceAdjustment (conta restrita) — NÃO APROVADO",
+    existingRecordId: null,
+    naturalKey: "VA_OPENING_ANCHOR",
+    before: "sem âncora explícita",
+    after: centAmb
+      ? `BLOQUEADO até o usuário resolver a ambiguidade de ${centAmb.item.delta} (${centAmb.item.counterparty}, ${centAmb.item.date}) — ver M2/Cenário A (${centAmb.scenarioA_canonicalIsCorrect.derivedOpeningBalanceVA}) vs Cenário B (${centAmb.scenarioB_devIsCorrect.derivedOpeningBalanceVA})`
+      : "sem ambiguidade near-amount pendente nesta rodada — ver M2",
+    amountEffectOnAccount: null,
+    amountEffectOnLiability: null,
+    source: "derivado da equação canônica (seção L) — ver M2 pros dois cenários",
+    confidence: centLevelScenarios?.status ?? "N/A",
+    reason: centAmb
+      ? `Nunca decidir silenciosamente entre ${centAmb.item.canonicalAmount} (canônico) e ${centAmb.item.persistedDevAmount} (persistido) — ver buildCentLevelScenarios.`
+      : "Sem ambiguidade centavo-a-centavo identificada nesta rodada.",
+    dependency: [seqPreflight],
+    idempotencyCheck: "N/A",
+    rollbackStrategy: "N/A",
+    status: centAmb ? "BLOCKED" : "DEFER",
+  });
+  push({
+    operation: "OPENING_ANCHOR_CANDIDATE",
+    model: "BalanceAdjustment (conta irrestrita) — NÃO APROVADO",
+    existingRecordId: null,
+    naturalKey: "ITAU_OPERATIONAL_OPENING_ANCHOR",
+    before: "sem âncora operacional explícita pro cutoff 24/08",
+    after: `SE aprovado no futuro: BalanceAdjustment{ accountId:'${itauAccount?.id ?? "<itau>"}', newBalance: ${itauOperationalLedger?.derivedOpeningBalanceItau ?? "?"}, occurredAt: 2026-08-24, confidence: DERIVED_ONLY }`,
+    amountEffectOnAccount: null,
+    amountEffectOnLiability: null,
+    source: "reconcileItauOperationalLedger — 28 movimentos candidatos, ver N2",
+    confidence: "DERIVED_ONLY — nunca confundir com saldo comprovado por extrato",
+    reason: `derivedOpeningBalanceItau = checkpointA (${itauOperationalLedger?.checkpointA ?? "?"}) - netOperationalMovements (${itauOperationalLedger?.netOperationalMovements ?? "?"}) = ${itauOperationalLedger?.derivedOpeningBalanceItau ?? "?"}. Gap vs saldo evidenciado em 20/08 = ${itauOperationalLedger?.gapVsEvidenced20Aug ?? "?"} — NÃO preenchido com movimentos inventados entre 21-23/08.`,
+    dependency: [seqPreflight],
+    idempotencyCheck: "N/A",
+    rollbackStrategy: "N/A",
+    status: "DEFER",
+  });
+  push({
+    operation: "N/A",
+    model: "N/A — apenas registro de não-ação",
+    existingRecordId: null,
+    naturalKey: "ITAU_POST_CHECKPOINT_DELTA_0_03",
+    before: "delta de +0,03 entre checkpointA reconciliado e checkpointB observado (issue SEPARADA, já existente desde fases anteriores)",
+    after: "SEM MUDANÇA — não absorvido na âncora de abertura operacional (item acima), permanece separado e não resolvido",
+    amountEffectOnAccount: null,
+    amountEffectOnLiability: null,
+    source: "fases anteriores (5.0.x) — reafirmado aqui explicitamente",
+    confidence: "UNRESOLVED_POST_CHECKPOINT_DIFFERENCE",
+    reason: "O usuário foi explícito: este +0,03 é uma questão POSTERIOR no tempo (depois de checkpointA) e não deve ser absorvido no opening balance operacional (que é ANTES/NO cutoff de 24/08).",
+    dependency: [seqPreflight],
+    idempotencyCheck: "N/A",
+    rollbackStrategy: "N/A",
+    status: "BLOCKED",
+  });
+
+  // --- Item 21: Tattoo — BLOQUEADO por ConfirmedCommitment.dueDate NOT NULL ---
+  for (const c of input.confirmedCommitments || []) {
+    const multiDate = (c.dateCandidates || []).length > 1;
+    push({
+      operation: multiDate ? "DEFER" : "CREATE",
+      model: "ConfirmedCommitment",
+      existingRecordId: null,
+      naturalKey: `description="${c.description}"`,
+      before: "N/A",
+      after: multiDate ? `BLOQUEADO: ConfirmedCommitment.dueDate é NOT NULL no schema; candidatas (${c.dateCandidates.join(" ou ")}) não decididas — escolher uma arbitrariamente seria inventar dado.` : `ConfirmedCommitment{ description:'${c.description}', amount:${money(c.amount).toString()}, dueDate:'${c.dateCandidates?.[0]}', status:CONFIRMED }`,
+      amountEffectOnAccount: null,
+      amountEffectOnLiability: `+${money(c.amount).toString()} se/quando criado`,
+      source: "input do usuário",
+      confidence: `amount=${c.amountConfidence}, data=${c.dateConfidence}`,
+      reason: multiDate ? "dueDate é campo obrigatório (NOT NULL) no schema — sem uma data única confirmada, o CREATE não pode acontecer sem inventar qual das candidatas é a real. Diferente dos planos de parcela externa (BLOCKED — nenhuma data nem aproximada existe), aqui a data real é esperada em poucos dias (19 ou 20/09) — por isso DEFER, não BLOCKED." : "Data única confirmada.",
+      dependency: [seqPreflight],
+      idempotencyCheck: "N/A",
+      rollbackStrategy: "N/A",
+      status: multiDate ? "DEFER" : "APPROVED_CANDIDATE",
+    });
+  }
+
+  // --- Item 22: Tiger — Contingency.expectedDate é NULLABLE, então NÃO bloqueia ---
+  for (const c of input.contingencies || []) {
+    push({
+      operation: "CREATE",
+      model: "Contingency",
+      existingRecordId: null,
+      naturalKey: `description="${c.description}"`,
+      before: "N/A",
+      after: { description: c.description, expectedAmount: c.expectedAmount != null ? money(c.expectedAmount).toString() : null, maxAmount: money(c.maxAmount).toString(), status: c.status, expectedDate: null },
+      amountEffectOnAccount: null,
+      amountEffectOnLiability: null,
+      source: "input do usuário",
+      confidence: `expectedAmount=${c.expectedAmountConfidence}, maxAmount=${c.maxAmountConfidence}`,
+      reason: "Contingency.expectedDate é nullable no schema — diferente de ConfirmedCommitment/ExternalInstallmentPlan, a ausência de data NÃO bloqueia o CREATE. Risco aguardando confirmação, não reduz freeMoney base (só contingencyExposure).",
+      dependency: [seqPreflight],
+      idempotencyCheck: `Contingency.findFirst({ where: { description: '${c.description}' } }) === null`,
+      rollbackStrategy: "DELETE da Contingency criada (por id retornado no momento da criação)",
+      status: "APPROVED_CANDIDATE",
+    });
+  }
+
+  // --- Item 23: household Phone — DEFER, nunca inventar valor/data ---
+  for (const b of input.householdBills || []) {
+    if (b.dueDateKnown === false) {
+      push({
+        operation: "DEFER",
+        model: "Bill / RecurringRule (conta doméstica)",
+        existingRecordId: null,
+        naturalKey: `name="${b.name}"`,
+        before: "N/A",
+        after: `BLOQUEADO: amount=${b.amount} é ${b.amountConfidence ?? "ESTIMATED"}, dueDate desconhecida — persistir com valor/data inventados violaria a instrução explícita do usuário.`,
+        amountEffectOnAccount: null,
+        amountEffectOnLiability: null,
+        source: "input do usuário",
+        confidence: b.confidence,
+        reason: "Sem amount exato nem dueDate, uma Bill materializada aqui seria uma invenção — permanece estimado/não resolvido até o usuário confirmar ao menos um dos dois.",
+        dependency: [seqPreflight],
+        idempotencyCheck: "N/A",
+        rollbackStrategy: "N/A",
+        status: "DEFER",
+      });
+    }
+  }
+
+  // --- VA: expenses canônicas já casadas — reshape do expenseMatching (excluindo o item NEAR_AMOUNT, já tratado acima como VA_OPENING_ANCHOR/M2) ---
+  // (nota: o dedup exato de cada Expense já foi feito por matchCanonicalExpenses; aqui só reshapeamos pro formato estrito)
+  return entries;
+}
+
+// ============================================================================
+// Fase 5.1A, item 26 — ordem segura de mutação, baseada em dependências REAIS
+// (não a lista conceitual de exemplo do pedido). Pura, documental — não executa nada.
+// ============================================================================
+function buildMutationOrdering() {
+  return {
+    rule: "A ordem abaixo é derivada das dependências REAIS observadas no manifesto (buildFullApplyManifest), não de uma lista genérica fixa.",
+    order: [
+      "1. PREFLIGHT — todas as assertions de buildPreflightAssertions() devem passar antes de qualquer write.",
+      "2. Card.closingDay — não depende de nada além do preflight; muda o comportamento de cálculo de closesAt/dueAt usado pelas próximas materializações (não recalcula rows já persistidas).",
+      "3. CardBill UPDATE por id (Set/Out/Nov/Fev) — depende de (2) só pra coerência conceitual (mesma mudança de fechamento real do cartão); tecnicamente pode rodar em paralelo, mas rodar depois evita confusão se (2) falhar no meio.",
+      "4. Reclassificação R$22 (Income.accountId VA->Itaú) — independente, só depende do preflight.",
+      "5. CREATEs de movimentos já datados (férias Income, CNPJ Transfer, R$50 Expense) — independentes entre si, dependem só do preflight + seus próprios dedup checks.",
+      "6. RecurringRule de salário (CREATE) — independente, depende só do preflight.",
+      "7. LINK do Income de 24/08 à RecurringRule de (6) — depende explicitamente de (6) ter sido criada com sucesso (precisa do id gerado).",
+      "8. Contingency (Tiger) — independente, depende só do preflight.",
+      "9. Itens BLOCKED/DEFER (VA opening anchor, Itaú opening anchor, +0,03 delta, ExternalInstallmentPlans, Tattoo, Phone, pagamento da fatura de setembro) — NÃO executados nesta rodada; permanecem como pendências explícitas pro usuário resolver antes de uma futura Fase 5.1B-2.",
+    ],
+    rationale: "A maioria das mutações desta fase é independente entre si (contas/modelos diferentes, sem FK compartilhada) — a única dependência FORTE real é (7) precisar do id gerado por (6). Isso permite rodar (2)-(6)+(8) em qualquer ordem entre si, com (7) estritamente depois de (6).",
+  };
+}
+
+// ============================================================================
+// Fase 5.1A, item 27 — estratégia de atomicidade. Documental, não executa nada.
+// ============================================================================
+function buildAtomicityStrategy() {
+  return {
+    recommendation: "Transação única do Prisma (o agrupador atômico de múltiplas queries, ver docs de Prisma sobre transações interativas) envolvendo TODOS os itens com status=APPROVED_CANDIDATE, com um preflight fora da transação (as assertions de leitura não precisam de lock) e um fingerprint antes/depois também fora da transação.",
+    reasoning:
+      "O conjunto de mutações aprovadas desta fase é pequeno (dezenas de rows, não milhares) e cabe confortavelmente numa única transação. Isso garante a invariante mais importante pedida pelo usuário: nunca deixar o banco pela metade se qualquer item falhar (ex: o LINK do Income à RecurringRule falhar depois da RecurringRule já ter sido criada) — com transação única, uma falha em qualquer passo desfaz TODOS os passos daquela rodada, sem precisar de lógica de compensação manual.",
+    alternativeConsidered: "Script idempotente com checkpoints (aplicar item a item, registrar progresso, permitir retomar de onde parou) — mais apropriado se o volume fosse muito maior (centenas/milhares de rows) ou se cada passo fosse lento/custoso. Não é o caso aqui — a transação única é mais simples E mais segura pro volume atual.",
+    itemsExcludedFromTransaction: "BLOCKED/DEFER/DELETE_ARTIFACT_CANDIDATE nunca entram na transação de apply — são explicitamente excluídos do apply-set (ver preflight assertion correspondente).",
+  };
+}
+
+// ============================================================================
+// Fase 5.1A, item 28 — preflight assertions que o FUTURO script de apply
+// (Fase 5.1B) deve checar antes do primeiro write. Documental — lista as
+// checagens, não as executa (a execução real é responsabilidade do script
+// de apply, que ainda não existe).
+// ============================================================================
+function buildPreflightAssertions() {
+  return [
+    { assertion: "DATABASE_ENV !== 'development' -> ABORT", reason: "Nunca rodar apply fora do branch dev — mesma guarda de assertTestEnvironment() já usada por todo script de escrita do projeto." },
+    { assertion: "host da connection string não é o branch dev esperado -> ABORT", reason: "Proteção contra apontar acidentalmente pro branch main/produção do Neon." },
+    { assertion: "contagem/fingerprint das rows-alvo (CardBill por id, Income por id, etc.) mudou desde a geração deste manifesto -> ABORT", reason: "O manifesto foi gerado num instante específico; se o banco mudou entre a geração e a execução (ex: usuário lançou algo pelo bot nesse meio-tempo), os before/after registrados podem estar desatualizados." },
+    { assertion: "CardBill.findUnique({cardId,cycleMonth}) já existe pra qualquer ciclo com operation=UPDATE proposto -> se NÃO existir, ABORT (nunca criar uma nova CardBill via um item classificado como UPDATE)", reason: "Constraint @@unique([cardId,cycleMonth]) — um UPDATE que na verdade precisaria de CREATE indica um manifesto desatualizado." },
+    { assertion: "saldo observado atual (Itaú/VA) ou limite do cartão diverge do valor usado como `before` neste manifesto -> ABORT", reason: "As âncoras observadas podem ter mudado (novo extrato, novo lançamento) — aplicar mutações calculadas sobre um `before` que não é mais verdade produziria resultado incorreto." },
+    { assertion: "qualquer naturalKey do apply-set colidiria com uma row já existente não prevista (ex: RecurringRule kind=income accountId=itau já existe quando o manifesto assumia que não existia) -> ABORT", reason: "Proteção contra duplicata silenciosa." },
+    { assertion: "versão do schema.prisma (hash do arquivo, ou `npx prisma migrate status`) diverge da versão em que este manifesto foi gerado -> ABORT", reason: "Um schema mudado pode invalidar suposições de nullability/constraint usadas para classificar BLOCKED vs APPROVED_CANDIDATE." },
+    { assertion: "qualquer item com status=BLOCKED, DEFER ou DELETE_ARTIFACT_CANDIDATE está presente no apply-set em execução -> ABORT", reason: "O apply-set desta fase é estritamente os itens status=APPROVED_CANDIDATE — nenhum BLOCKED/DEFER/DELETE_ARTIFACT_CANDIDATE deve ser executado sem uma nova aprovação explícita." },
+  ];
+}
+
+// ============================================================================
+// Fase 5.1A, item 30 — simulação do estado pós-apply, SEM ESCREVER NADA. Só
+// aplica em memória os efeitos dos itens status=APPROVED_CANDIDATE (excluindo
+// BLOCKED/DEFER/DELETE_ARTIFACT_CANDIDATE) sobre os valores JÁ CONHECIDOS
+// (input do usuário), mostrando onde bloqueadores de centavo impedem
+// fechamento exato.
+// ============================================================================
+function simulatePostApplyState(fullManifest, { input, cardRecon, itauOperationalLedger, centLevelScenarios }) {
+  const approved = fullManifest.filter((m) => m.status === "APPROVED_CANDIDATE");
+  const blocked = fullManifest.filter((m) => m.status !== "APPROVED_CANDIDATE");
+
+  const cardUsedAfter = sumMoney((input.card?.bills || []).filter((b) => b.status !== "PAID").map((b) => money(b.amount)));
+  const cardNextLiability = (input.card?.bills || []).filter((b) => b.status !== "PAID").sort((a, b) => a.cycleMonth.localeCompare(b.cycleMonth))[0] ?? null;
+  const futureCardObligations = (input.card?.bills || []).filter((b) => b.status !== "PAID").slice(1);
+
+  const externalInstallmentNextPackage = sumMoney((input.externalInstallmentPlans || []).map((p) => money(p.installmentValue)));
+
+  const scenarioA = centLevelScenarios?.ambiguities?.[0]?.scenarioA_canonicalIsCorrect?.derivedOpeningBalanceVA ?? null;
+  const scenarioB = centLevelScenarios?.ambiguities?.[0]?.scenarioB_devIsCorrect?.derivedOpeningBalanceVA ?? null;
+  const scenarioDelta = scenarioA != null && scenarioB != null ? subtractMoney(money(scenarioA), money(scenarioB)).abs().toString() : null;
+  const deferredMovementsDescriptions = (input.checkingAccount?.movementsAfterCheckpointA || []).map((m) => `${m.description} (${m.amount})`);
+
+  return {
+    itemsApplied: approved.length,
+    itemsExcluded: blocked.length,
+    itauComputedBalance: {
+      value: "INDETERMINATE_UNTIL_OPENING_ANCHOR_RESOLVED",
+      reason: `Depende do opening balance operacional (item BLOCKED/DEFER — ${itauOperationalLedger?.derivedOpeningBalanceItau ?? "?"} DERIVED_ONLY) mais os movimentos aprovados (${deferredMovementsDescriptions.join(", ") || "nenhum"}) e quaisquer pagamentos de fatura ainda em DEFER — sem o opening aprovado, não há um saldo computado final único.`,
+      knownComponents: {
+        derivedOperationalOpening: itauOperationalLedger?.derivedOpeningBalanceItau ?? null,
+        checkpointA: itauOperationalLedger?.checkpointA ?? null,
+        approvedMovementsAfterCheckpointA: (input.checkingAccount?.movementsAfterCheckpointA || []).map((m) => ({ description: m.description, amount: m.amount, type: m.type })),
+      },
+    },
+    vaComputedBalance: {
+      value: "INDETERMINATE_UNTIL_CENT_LEVEL_AMBIGUITY_RESOLVED",
+      scenarioA,
+      scenarioB,
+      expectedDelta: scenarioDelta != null ? `${scenarioDelta} (exatamente a ambiguidade centavo-a-centavo identificada em M2 — nenhum outro fator diverge entre os dois cenários)` : "N/A — sem ambiguidade near-amount pendente",
+    },
+    cardUsed: cardUsedAfter.toString(),
+    cardNextLiability: cardNextLiability ? { cycleMonth: cardNextLiability.cycleMonth, amount: money(cardNextLiability.amount).toString() } : null,
+    futureCardObligations: { total: sumMoney(futureCardObligations.map((b) => money(b.amount))).toString(), items: futureCardObligations.map((b) => ({ cycleMonth: b.cycleMonth, amount: money(b.amount).toString() })) },
+    externalInstallmentState: {
+      status: fullManifest.some((m) => m.model.includes("ExternalInstallmentPlan") && m.status === "BLOCKED")
+        ? "BLOCKED — nenhum plano pode ser criado nesta rodada (firstDueDate NOT NULL sem data confirmada)"
+        : fullManifest.some((m) => m.model.includes("ExternalInstallmentPlan"))
+          ? "parcialmente aprovado — ver manifesto completo pra detalhes por plano"
+          : "N/A — nenhum plano de parcela externa neste input",
+      nextPackageIfUnblocked: externalInstallmentNextPackage.toString(),
+    },
+    freeMoneyNote: "Recalcular freeMoney/safeToSpend/financialStatus reais requer os saldos de conta computados acima — como ambos (Itaú e VA) permanecem INDETERMINATE até os bloqueadores serem resolvidos pelo usuário, engineDryRun (seção W) já documenta a versão COM as estimativas atuais; este bloco não duplica esse cálculo, só isola o que MUDARIA se e somente se os itens BLOCKED/DEFER fossem resolvidos.",
+    remainingBlockers: blocked.map((m) => ({ naturalKey: m.naturalKey, status: m.status, model: m.model })),
+  };
+}
+
+// ============================================================================
 // Y — Missing evidence / blockers agregados de todas as seções.
 //
 // Também 100% derivado do input — nenhuma referência a um fato específico do
@@ -2124,12 +2851,34 @@ async function main() {
 
   const cardRecon = await reconcileCard(input.card, csvAudit);
 
+  // Fase 5.1A, itens 2-3 e 6-9 — cenários de ambiguidade centavo-a-centavo (VA)
+  // e reconstrução do ledger operacional do Itaú (24/08 -> checkpointA 04/09).
+  const centLevelScenarios = input.restrictedAccount
+    ? buildCentLevelScenarios(input.restrictedAccount.canonicalExpenses || [], vaRecon?.canonicalLedger?.expenseMatching, {
+        recharge: input.restrictedAccount.recharge?.amount,
+        observedClosing: input.restrictedAccount.observedClosing?.amount,
+      })
+    : { status: "MISSING_EVIDENCE" };
+  const itauOperationalLedger = input.checkingAccount?.operationalHistoryEvidence
+    ? reconcileItauOperationalLedger(input.checkingAccount.operationalHistoryEvidence, {
+        checkpointA: input.checkingAccount.checkpointA?.amount,
+        operationalHistoryStart: settings.operationalHistoryStart,
+      })
+    : { status: "NOT_PROVIDED" };
+  const externalInstallmentSettlementSemantics = auditExternalInstallmentSettlementSemantics();
+
   const engineResult = engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings: settings, asOf: d(input.asOf), csvAudit });
   const confidenceMatrix = buildConfidenceMatrix(input);
   const proposedCanonicalSnapshot = buildProposedCanonicalSnapshot(input, cardRecon);
   const proposedMutations = buildProposedMutations(input, inventory, checkingRecon, vaRecon, cardRecon);
   const potentialLastResortMutations = buildPotentialLastResortMutations(checkingRecon, vaRecon);
   const blockers = collectBlockers({ input, checkingRecon, vaRecon, engineResult, cardRecon, schemaAudit });
+
+  const fullApplyManifest = await buildFullApplyManifest(input, { cardRecon, itauOperationalLedger, centLevelScenarios });
+  const mutationOrdering = buildMutationOrdering();
+  const atomicityStrategy = buildAtomicityStrategy();
+  const preflightAssertions = buildPreflightAssertions();
+  const postApplySimulation = simulatePostApplyState(fullApplyManifest, { input, cardRecon, itauOperationalLedger, centLevelScenarios });
 
   const report = {
     meta: { generatedAt: new Date().toISOString(), asOf: input.asOf, tool: "scripts/snapshot-dry-run.mjs", writesToDb: false },
@@ -2171,12 +2920,15 @@ async function main() {
       externalSourceInvestigation: vaRecon.externalSourceInvestigation,
     },
     M_derivedOpeningBalanceRestrictedAccount: { value: "INDETERMINATE", basis: "recharge NÃO é opening balance — ver seção L", openingBalanceEvidence: "MISSING" },
+    M2_centLevelScenarios_VA_OPENING_ANCHOR: centLevelScenarios,
     N_cardReconciliation: cardRecon,
+    N2_itauOperationalLedgerReconstruction: itauOperationalLedger,
     O_persistedVsCanonicalCardBills: {
       persistedInDb: cardRecon.persistedCardBillsInDb,
       classified: cardRecon.persistedCardBillsClassified,
       cardBillUniqueConstraint: cardRecon.cardBillUniqueConstraint,
       observedVsUnderlyingPurchasesExplained: cardRecon.observedVsUnderlyingPurchasesExplained,
+      manifestById: cardRecon.cardBillManifestById,
     },
     P_externalInstallments:
       (csvAudit.externalInstallmentCandidates || []).length > 0
@@ -2184,6 +2936,7 @@ async function main() {
         : (input.externalInstallmentPlans || []).length > 0
           ? input.externalInstallmentPlans
           : { status: "MISSING_EVIDENCE", note: "Nenhum plano com evidência suficiente informado neste snapshot." },
+    P3_externalInstallmentSettlementSemantics: externalInstallmentSettlementSemantics,
     Z_legacyCsvStagingAudit: csvAudit,
     P2_purchaseAudit: cardRecon.purchaseAudit,
     Q_recurringIncomeProposal: {
@@ -2207,6 +2960,11 @@ async function main() {
     X_proposedMutationsForFase51: proposedMutations,
     X2_potentialLastResortMutations_NOT_APPROVED: potentialLastResortMutations,
     Y_missingEvidenceBlockers: blockers,
+    Z2_fullApplyManifest_Fase51A: fullApplyManifest,
+    Z3_mutationOrdering: mutationOrdering,
+    Z4_atomicityStrategy: atomicityStrategy,
+    Z5_preflightAssertionsForFase51B: preflightAssertions,
+    Z6_postApplySimulation_APPROVED_CANDIDATE_ONLY: postApplySimulation,
   };
 
   console.log(JSON.stringify(report, null, 2));
@@ -2243,4 +3001,13 @@ export {
   buildPotentialLastResortMutations,
   confirmCardBillUniqueConstraint,
   auditPurchasesAgainstKnownBills,
+  buildCentLevelScenarios,
+  reconcileItauOperationalLedger,
+  auditExternalInstallmentSettlementSemantics,
+  buildCardBillManifestById,
+  buildFullApplyManifest,
+  buildMutationOrdering,
+  buildAtomicityStrategy,
+  buildPreflightAssertions,
+  simulatePostApplyState,
 };

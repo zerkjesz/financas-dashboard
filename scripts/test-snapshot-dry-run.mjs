@@ -29,6 +29,15 @@ import {
   buildPotentialLastResortMutations,
   confirmCardBillUniqueConstraint,
   auditPurchasesAgainstKnownBills,
+  buildCentLevelScenarios,
+  reconcileItauOperationalLedger,
+  auditExternalInstallmentSettlementSemantics,
+  buildCardBillManifestById,
+  buildFullApplyManifest,
+  buildMutationOrdering,
+  buildAtomicityStrategy,
+  buildPreflightAssertions,
+  simulatePostApplyState,
   main,
 } from "./snapshot-dry-run.mjs";
 import { parseSemicolonCsv, auditCsvRows, reconstructExternalInstallmentCandidates } from "./lib/csvStagingAudit.mjs";
@@ -841,6 +850,248 @@ console.log("--- Fase 5.0.1: testes sintéticos do snapshot-dry-run ---\n");
   } finally {
     await prisma.card.delete({ where: { id: card.id } }).catch(() => {});
   }
+}
+
+// ============================================================================
+// Fase 5.1A — buildCentLevelScenarios: ambiguidade near-amount gera DOIS
+// cenários nomeados, nunca decide sozinho. Dados 100% fictícios.
+// ============================================================================
+{
+  const canonicalExpenses = [{ date: "2026-01-05", counterparty: "Loja Fictícia", amount: 200 }];
+  const expenseMatching = {
+    matches: [
+      {
+        date: "2026-01-05",
+        counterparty: "Loja Fictícia",
+        amount: "200",
+        classification: "AMBIGUOUS_MATCH",
+        matchType: "NEAR_AMOUNT",
+        matchedDevExpenseId: "fake-expense-id-1",
+        matchedDevAmount: "199.90",
+        delta: "-0.10",
+      },
+    ],
+  };
+  const result = buildCentLevelScenarios(canonicalExpenses, expenseMatching, { recharge: 1000, observedClosing: 900 });
+  check("status UNRESOLVED_CENT_LEVEL_DEPENDENCY quando existe ambiguidade near-amount", result.status === "UNRESOLVED_CENT_LEVEL_DEPENDENCY");
+  check("exatamente 1 ambiguidade reportada", result.ambiguities.length === 1);
+  const amb = result.ambiguities[0];
+  check("Cenário A usa o valor CANÔNICO (200)", eq(amb.scenarioA_canonicalIsCorrect.canonicalExpensesTotal, 200));
+  check("Cenário B usa o valor PERSISTIDO (199.90)", eq(amb.scenarioB_devIsCorrect.canonicalExpensesTotal, 199.9));
+  check("Cenário A propõe UPDATE do dev (nunca KEEP)", amb.scenarioA_canonicalIsCorrect.devExpenseAction.includes("UPDATE"));
+  check("Cenário B propõe KEEP do dev (nunca UPDATE)", amb.scenarioB_devIsCorrect.devExpenseAction.includes("KEEP"));
+  check("Cenário A fecha o checksum exatamente", amb.scenarioA_canonicalIsCorrect.finalChecksum.matches === true);
+  check("Cenário B fecha o checksum exatamente", amb.scenarioB_devIsCorrect.finalChecksum.matches === true);
+
+  const noAmbiguity = buildCentLevelScenarios([{ date: "2026-01-05", counterparty: "Loja B", amount: 50 }], { matches: [{ classification: "ALREADY_PERSISTED", matchType: "EXACT_AMOUNT" }] }, { recharge: 1000, observedClosing: 950 });
+  check("sem ambiguidade near-amount -> NO_CENT_LEVEL_AMBIGUITY", noAmbiguity.status === "NO_CENT_LEVEL_AMBIGUITY");
+}
+
+// ============================================================================
+// Fase 5.1A — reconcileItauOperationalLedger: soma/classifica movimentos
+// candidatos e deriva opening balance, sempre DERIVED_ONLY. Fictício.
+// ============================================================================
+{
+  const evidence = {
+    evidenced20Aug: { amount: 40, date: "2026-01-10", confidence: "CONFIRMED_BY_MEMORY" },
+    operationalLedgerCandidates: [
+      { amount: 1000, description: "renda fictícia", semanticHint: "INCOME_RECURRING_SALARY" },
+      { amount: -300, description: "gasto fictício A", semanticHint: "EXPENSE" },
+      { amount: -150.5, description: "gasto fictício B", semanticHint: "EXPENSE" },
+    ],
+    datesNote: "teste — datas em lote, não individuais",
+  };
+  const result = reconcileItauOperationalLedger(evidence, { checkpointA: 600, operationalHistoryStart: new Date("2026-01-01T00:00:00.000Z") });
+  check("status PROVIDED quando há candidatos", result.status === "PROVIDED");
+  check("netOperationalMovements = 1000-300-150.50 = 549.50", eq(result.netOperationalMovements, 549.5));
+  check("derivedOpeningBalanceItau = 600 - 549.50 = 50.50", eq(result.derivedOpeningBalanceItau, 50.5));
+  check("openingBalanceEvidence sempre DERIVED_ONLY, nunca EVIDENCED", result.openingBalanceEvidence === "DERIVED_ONLY");
+  check("semanticBreakdown agrupa por hint (EXPENSE = -450.50)", eq(result.semanticBreakdown.EXPENSE, -450.5));
+  check("gapVsEvidenced20Aug = 50.50 - 40 = 10.50", eq(result.gapVsEvidenced20Aug, 10.5));
+
+  const missing = reconcileItauOperationalLedger(null, { checkpointA: 600, operationalHistoryStart: null });
+  check("sem evidência -> status NOT_PROVIDED", missing.status === "NOT_PROVIDED");
+}
+
+// ============================================================================
+// Fase 5.1A — auditExternalInstallmentSettlementSemantics: confirma por
+// LEITURA REAL do código-fonte (não por suposição) que markExternalInstallmentPaid
+// nunca cria Expense e que expenseId é opcional/único.
+// ============================================================================
+{
+  const result = auditExternalInstallmentSettlementSemantics();
+  check("confirma que markExternalInstallmentPaid NÃO cria Expense", result.question_A_marksPaidAlsoCreatesExpense === false);
+  check("confirma que é puramente obligation-state", result.question_B_isOnlyObligationState === true);
+  check("expenseId é opcional no service", result.question_D_relationshipExpenseToExternalInstallment.expenseIdOptional === true);
+  check("expenseId é @unique no schema (no máximo 1 ExternalInstallment por Expense)", result.question_D_relationshipExpenseToExternalInstallment.expenseIdUniqueInSchema === true);
+  check("conclusão: 1 pagamento pode quitar várias parcelas sem duplicar débito/Expense/deixar pendência", result.conclusion.canRepresentOnePaymentSettlingMultipleInstallments === true);
+  check("nenhuma mudança de schema necessária pra representar isso", result.conclusion.noSchemaChangeNeeded === true);
+}
+
+// ============================================================================
+// Fase 5.1A — buildCardBillManifestById: reshape estrito por id, nunca
+// propõe CREATE (constraint cardId+cycleMonth garante 1 row por ciclo — toda
+// correção de ciclo já persistido é OBRIGATORIAMENTE UPDATE, nunca CREATE).
+// ============================================================================
+{
+  const knownBills = [
+    { cycleMonth: "2026-02", amountMoney: money(300), status: "UNPAID" },
+    { cycleMonth: "2026-03", amountMoney: money(150), status: "PAID" },
+  ];
+  const classifiedBills = [
+    { id: "cb-update", cycleMonth: "2026-02", totalAmount: "250.00", paidAmount: "0.00", status: "open", remainingAmount: "250.00", classification: "CANONICAL_UPDATE_CANDIDATE", reasoning: "diverge", wouldContaminateEngineIfLeftAsIs: true },
+    { id: "cb-keep", cycleMonth: "2026-03", totalAmount: "150.00", paidAmount: "150.00", status: "paid", remainingAmount: "0.00", classification: "KEEP_OR_PARTIAL_MATCH", reasoning: "bate", wouldContaminateEngineIfLeftAsIs: false },
+    { id: "cb-artifact", cycleMonth: "2026-04", totalAmount: "0.00", paidAmount: null, status: "open", remainingAmount: "0.00", classification: "CLEAR_ARTIFACT_CANDIDATE", reasoning: "artefato zerado", wouldContaminateEngineIfLeftAsIs: false },
+    { id: "cb-unknown", cycleMonth: "2026-05", totalAmount: "80.00", paidAmount: "0.00", status: "open", remainingAmount: "80.00", classification: "UNKNOWN", reasoning: "sem evidência", wouldContaminateEngineIfLeftAsIs: true },
+  ];
+  const manifest = buildCardBillManifestById(knownBills, classifiedBills);
+  const byId = Object.fromEntries(manifest.map((m) => [m.id, m]));
+  check("cycle com valor divergente -> proposedAction UPDATE (nunca CREATE)", byId["cb-update"].proposedAction === "UPDATE");
+  check("cycle já batendo -> proposedAction KEEP", byId["cb-keep"].proposedAction === "KEEP");
+  check("artefato zerado em lote -> DELETE_ARTIFACT_CANDIDATE", byId["cb-artifact"].proposedAction === "DELETE_ARTIFACT_CANDIDATE");
+  check("sem valor canônico conhecido -> DEFER_UNKNOWN", byId["cb-unknown"].proposedAction === "DEFER_UNKNOWN");
+  check("nenhuma proposedAction é CREATE — constraint cardId+cycleMonth nunca permite CREATE pra ciclo já persistido", manifest.every((m) => m.proposedAction !== "CREATE"));
+}
+
+// ============================================================================
+// Fase 5.1A, item 32 — buildFullApplyManifest: manifesto estrito de 15
+// campos, idempotência, prevenção de duplicata (valor sozinho NÃO basta —
+// achado real desta fase), item BLOCKED nunca entra no apply-set simulado,
+// pagamento histórico de fatura nunca vira Expense, delta pós-checkpoint
+// nunca é absorvido na âncora de abertura. Fixtures fictícias, sempre limpas.
+// ============================================================================
+{
+  const suffix = Date.now();
+  const checkingAccount = await prisma.account.create({ data: { slug: `teste-fase51a-checking-${suffix}`, name: `[${MARK}] Conta corrente fictícia`, type: "checking" } });
+  const vaAccount = await prisma.account.create({ data: { slug: `teste-fase51a-va-${suffix}`, name: `[${MARK}] Conta restrita fictícia`, type: "food_voucher" } });
+  const incomeToReclassify = await prisma.income.create({ data: { amount: money(33), description: `[${MARK}] pix de terceiro fictício`, accountId: vaAccount.id, occurredAt: new Date("2026-01-08T00:00:00.000Z") } });
+  // Duplicata real: já existe uma Expense com o MESMO valor e MESMA data do movimento fictício abaixo (deve ser BLOCKED).
+  const preexistingDuplicate = await prisma.expense.create({ data: { amount: money(75), description: `[${MARK}] gasto já lançado antes`, accountId: checkingAccount.id, occurredAt: new Date("2026-01-20T00:00:00.000Z") } });
+  // Falso-positivo por valor: mesmo valor (40), data DIFERENTE — não deve ser tratado como duplicata do movimento de renda fictícia abaixo.
+  await prisma.income.create({ data: { amount: money(40), description: `[${MARK}] renda antiga, valor coincide por acaso`, accountId: checkingAccount.id, occurredAt: new Date("2025-06-01T00:00:00.000Z") } });
+
+  try {
+    const input = {
+      asOf: "2026-01-20",
+      checkingAccount: {
+        slug: checkingAccount.slug,
+        checkpointA: { amount: 1000, date: "2026-01-20" },
+        movementsAfterCheckpointA: [
+          { type: "INFLOW", description: `[${MARK}] renda fictícia nova`, amount: 40, date: "2026-01-20", movementConfidence: "CONFIRMED" },
+          { type: "OUTFLOW", description: `[${MARK}] gasto já lançado antes`, amount: 75, date: "2026-01-20", movementConfidence: "CONFIRMED", economicClassification: "EXPENSE", economicClassificationConfidence: "CONFIRMED" },
+        ],
+        operationalHistoryEvidence: {
+          operationalLedgerCandidates: [{ amount: -90, description: `[${MARK}] pagamento de fatura fictício`, semanticHint: "CARD_BILL_PAYMENT", settlesCardBillCycleMonth: "2026-02" }],
+        },
+      },
+      restrictedAccount: { slug: vaAccount.slug },
+      reclassifiedIncomes: [
+        {
+          description: `[${MARK}] pix de terceiro fictício`,
+          amount: 33,
+          persistedAccountSlug: vaAccount.slug,
+          canonicalAccountSlug: checkingAccount.slug,
+          confidence: "CONFIRMED_BY_MEMORY",
+          source: "teste",
+          note: "teste de reclassificação",
+        },
+      ],
+      mainIncome: { amount: 5000, date: "2026-01-20", dayOfMonth: 20, confidence: "CONFIRMED" },
+      externalInstallmentPlans: [{ description: `[${MARK}] plano fictício`, installmentValue: 60, paidInstallments: 2, installmentCount: 5, confidence: "CONFIRMED_BY_MEMORY", source: "teste" }],
+      confirmedCommitments: [
+        { description: `[${MARK}] compromisso com data única`, amount: 200, dateCandidates: ["2026-02-01"], dateConfidence: "CONFIRMED", funding: "UNDEFINED", amountConfidence: "CONFIRMED_BY_MEMORY" },
+        { description: `[${MARK}] compromisso com data incerta`, amount: 300, dateCandidates: ["2026-02-01", "2026-02-02"], dateConfidence: "CONFIRMED", funding: "UNDEFINED", amountConfidence: "CONFIRMED_BY_MEMORY" },
+      ],
+      contingencies: [{ description: `[${MARK}] risco fictício`, expectedAmount: 100, maxAmount: 200, status: "AWAITING_INFORMATION", expectedAmountConfidence: "ESTIMATED", maxAmountConfidence: "CONFIRMED_BY_MEMORY" }],
+      householdBills: [{ name: `[${MARK}] conta doméstica estimada`, amount: 60, amountConfidence: "ESTIMATED", status: "PENDING", dueDateKnown: false, confidence: "CONFIRMED_BY_MEMORY" }],
+    };
+
+    const cardRecon = {
+      cardBillManifestById: [
+        { id: "cb-fake-update", cycleMonth: "2026-02", current: { totalAmount: "100.00", paidAmount: "0.00", status: "open", remainingAmount: "100.00" }, canonical: { totalAmount: "120.00", paidAmount: "0.00", status: "open" }, proposedAction: "UPDATE", reason: "teste", wouldContaminateEngineIfLeftAsIs: true },
+      ],
+    };
+    const itauOperationalLedger = { checkpointA: "1000", netOperationalMovements: "40", derivedOpeningBalanceItau: "960", gapVsEvidenced20Aug: null };
+    const centLevelScenarios = { status: "NO_CENT_LEVEL_AMBIGUITY" };
+
+    const manifest = await buildFullApplyManifest(input, { cardRecon, itauOperationalLedger, centLevelScenarios });
+
+    check("todo item do manifesto tem os 15 campos do formato estrito", manifest.every((m) => ["sequence", "operation", "model", "existingRecordId", "naturalKey", "before", "after", "amountEffectOnAccount", "amountEffectOnLiability", "source", "confidence", "reason", "dependency", "idempotencyCheck", "rollbackStrategy", "status"].every((k) => k in m)));
+    check("sequence é única e crescente (1..N sem buracos)", manifest.every((m, i) => m.sequence === i + 1));
+
+    const reclass = manifest.find((m) => m.model === "Income" && m.naturalKey.includes("33"));
+    check("reclassificação R$33 resolve o id REAL do Income persistido (nunca cria um novo)", reclass?.existingRecordId === incomeToReclassify.id);
+    check("reclassificação R$33 é APPROVED_CANDIDATE (fato + id resolvidos)", reclass?.status === "APPROVED_CANDIDATE");
+
+    const dupExpense = manifest.find((m) => m.model === "Expense" && m.naturalKey.includes("75"));
+    check("[prevenção de duplicata] gasto de R$75 na MESMA data de um já existente -> BLOCKED, nunca CREATE silencioso", dupExpense?.status === "BLOCKED" && dupExpense?.existingRecordId === preexistingDuplicate.id);
+
+    const newIncome = manifest.find((m) => m.model === "Income" && m.naturalKey.includes("40"));
+    check("[nunca dedup só por valor] renda de R$40 em data DIFERENTE do achado por valor -> CREATE aprovado, não bloqueado por falso-positivo", newIncome?.status === "APPROVED_CANDIDATE" && newIncome?.operation === "CREATE");
+
+    const cardBillEntry = manifest.find((m) => m.model === "CardBill" && m.existingRecordId === "cb-fake-update");
+    check("[card update vs unique constraint] correção de ciclo já persistido é sempre UPDATE, nunca CREATE", cardBillEntry?.operation === "UPDATE");
+
+    const planEntries = manifest.filter((m) => m.model.includes("ExternalInstallmentPlan"));
+    check("plano de parcela externa sem firstDueDate confirmado -> BLOCKED (nunca inventa data)", planEntries.length === 1 && planEntries[0].status === "BLOCKED");
+
+    const confirmedSingleDate = manifest.find((m) => m.naturalKey.includes("compromisso com data única"));
+    const confirmedMultiDate = manifest.find((m) => m.naturalKey.includes("compromisso com data incerta"));
+    check("ConfirmedCommitment com 1 data candidata -> APPROVED_CANDIDATE", confirmedSingleDate?.status === "APPROVED_CANDIDATE");
+    check("ConfirmedCommitment com múltiplas datas candidatas -> DEFER (nunca escolhe uma arbitrariamente)", confirmedMultiDate?.status === "DEFER");
+
+    const contingencyEntry = manifest.find((m) => m.model === "Contingency");
+    check("Contingency sem expectedDate -> APPROVED_CANDIDATE (campo é nullable no schema, não bloqueia)", contingencyEntry?.status === "APPROVED_CANDIDATE");
+
+    const phoneEntry = manifest.find((m) => m.naturalKey.includes("conta doméstica estimada"));
+    check("bill doméstica com dueDateKnown=false -> DEFER (nunca cria com valor/data inventados)", phoneEntry?.status === "DEFER");
+
+    const paymentTransferEntry = manifest.find((m) => m.naturalKey.includes("cycleMonth=2026-09") || m.model.includes("Transfer (kind=card_bill_payment)"));
+    check("[pagamento histórico de fatura nunca vira Expense] modelo do pagamento de fatura é Transfer, nunca Expense", paymentTransferEntry && !paymentTransferEntry.model.includes("Expense") && paymentTransferEntry.model.includes("Transfer"));
+
+    const itauOpeningEntry = manifest.find((m) => m.naturalKey === "ITAU_OPERATIONAL_OPENING_ANCHOR");
+    const postCheckpointDeltaEntry = manifest.find((m) => m.naturalKey === "ITAU_POST_CHECKPOINT_DELTA_0_03");
+    check("[delta pós-checkpoint nunca absorvido] opening anchor operacional e o delta +0,03 são ENTRADAS SEPARADAS no manifesto", itauOpeningEntry && postCheckpointDeltaEntry && itauOpeningEntry.sequence !== postCheckpointDeltaEntry.sequence);
+    check("delta pós-checkpoint permanece BLOCKED/não resolvido, nunca aplicado", postCheckpointDeltaEntry?.status === "BLOCKED");
+
+    // --- Ordenação, atomicidade, preflight — documentais, sem dado real ---
+    const ordering = buildMutationOrdering();
+    check("buildMutationOrdering retorna uma ordem não vazia", Array.isArray(ordering.order) && ordering.order.length > 0);
+    const atomicity = buildAtomicityStrategy();
+    check("buildAtomicityStrategy recomenda transação única", atomicity.recommendation.toLowerCase().includes("transa"));
+    const preflight = buildPreflightAssertions();
+    check("buildPreflightAssertions retorna assertions não vazias, cada uma com assertion+reason", preflight.length > 0 && preflight.every((p) => p.assertion && p.reason));
+    check("preflight inclui checagem de ambiente != development", preflight.some((p) => p.assertion.includes("development")));
+
+    // --- Simulação pós-apply: só itens APPROVED_CANDIDATE contam como aplicados ---
+    const simulation = simulatePostApplyState(manifest, { input, cardRecon, itauOperationalLedger, centLevelScenarios });
+    const approvedCount = manifest.filter((m) => m.status === "APPROVED_CANDIDATE").length;
+    const blockedCount = manifest.filter((m) => m.status !== "APPROVED_CANDIDATE").length;
+    check("[item BLOCKED nunca entra no apply-set simulado] itemsApplied = só os APPROVED_CANDIDATE", simulation.itemsApplied === approvedCount);
+    check("itemsExcluded contabiliza TODOS os não-aprovados (BLOCKED+DEFER+DELETE_ARTIFACT_CANDIDATE)", simulation.itemsExcluded === blockedCount);
+    check("remainingBlockers nunca inclui um item APPROVED_CANDIDATE", simulation.remainingBlockers.every((b) => b.status !== "APPROVED_CANDIDATE"));
+  } finally {
+    await prisma.expense.deleteMany({ where: { description: { contains: MARK } } });
+    await prisma.income.deleteMany({ where: { description: { contains: MARK } } });
+    await prisma.account.deleteMany({ where: { slug: { in: [checkingAccount.slug, vaAccount.slug] } } });
+  }
+}
+
+// ============================================================================
+// Fase 5.1A — determinismo: mesmo input (dados fictícios) + mesmo estado do
+// banco produz o MESMO manifesto byte-a-byte (nunca depende de Date.now()).
+// ============================================================================
+{
+  const input = {
+    asOf: "2026-01-20",
+    checkingAccount: { movementsAfterCheckpointA: [] },
+    confirmedCommitments: [],
+    contingencies: [],
+  };
+  const cardRecon = { cardBillManifestById: [] };
+  const run1 = await buildFullApplyManifest(input, { cardRecon, itauOperationalLedger: { status: "NOT_PROVIDED" }, centLevelScenarios: { status: "NO_CENT_LEVEL_AMBIGUITY" } });
+  const run2 = await buildFullApplyManifest(input, { cardRecon, itauOperationalLedger: { status: "NOT_PROVIDED" }, centLevelScenarios: { status: "NO_CENT_LEVEL_AMBIGUITY" } });
+  check("buildFullApplyManifest é determinístico pro mesmo input+estado do banco", JSON.stringify(run1) === JSON.stringify(run2));
 }
 
 console.log(`\n${passed}/${results.length} teste(s) passaram.`);

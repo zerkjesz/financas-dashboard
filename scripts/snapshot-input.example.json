@@ -50,6 +50,23 @@
       "amount": 1090.00,
       "date": "2026-01-15",
       "confidence": "CONFIRMED"
+    },
+    "operationalHistoryEvidence": {
+      "_comment": "Fase 5.1A — reconstrução do ledger OPERACIONAL entre um cutoff (ex: início do mês) e checkpointA, a partir de uma lista de movimentos candidatos SEM data individual confirmada (só valor e ordem aproximada — nunca inventar datas exatas). Usado por reconcileItauOperationalLedger para derivar um opening balance DERIVED_ONLY.",
+      "evidenced20Aug": {
+        "amount": 300.00,
+        "date": "2026-01-10",
+        "confidence": "CONFIRMED_BY_MEMORY",
+        "note": "Exemplo — saldo evidenciado ANTES do cutoff operacional, contexto apenas, não usado pra derivar o opening diretamente."
+      },
+      "operationalLedgerCandidates": [
+        { "amount": 500.00, "description": "Exemplo de renda recorrente", "semanticHint": "INCOME_RECURRING_SALARY" },
+        { "amount": -40.00, "description": "Exemplo de gasto simples", "semanticHint": "EXPENSE" },
+        { "amount": 25.00, "description": "Exemplo de pix recebido de terceiro", "semanticHint": "INCOME_TRANSFER_IN_NEVER_VA" },
+        { "amount": -80.00, "description": "Exemplo de quitação de parcela externa", "semanticHint": "EXTERNAL_INSTALLMENT_SETTLEMENT", "settlesPlan": "Exemplo de parcela externa" },
+        { "amount": -150.00, "description": "Exemplo de pagamento de fatura de cartão", "semanticHint": "CARD_BILL_PAYMENT", "settlesCardBillCycleMonth": "2026-01" }
+      ],
+      "datesNote": "Exemplo — datas individuais não fornecidas com confiança suficiente pra cada movimento; apenas valor e ordem aproximada são evidência."
     }
   },
 
