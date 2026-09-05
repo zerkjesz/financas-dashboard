@@ -56,7 +56,12 @@
   "restrictedAccount": {
     "slug": "vale-alimentacao-exemplo",
     "recharge": { "amount": 500.00, "date": "2026-01-01", "confidence": "CONFIRMED" },
-    "observedClosing": { "amount": 300.00, "date": "2026-01-15", "confidence": "CONFIRMED" }
+    "observedClosing": { "amount": 300.00, "date": "2026-01-15", "confidence": "CONFIRMED" },
+    "canonicalExpenses": [
+      { "date": "2026-01-02", "counterparty": "Exemplo de mercado", "amount": 50.00, "confidence": "CONFIRMED_BY_MEMORY" },
+      { "date": "2026-01-05", "counterparty": "Exemplo de lanche", "amount": 20.00, "confidence": "CONFIRMED_BY_MEMORY" }
+    ],
+    "canonicalExpensesSource": "exemplo — evidência conversacional anterior fictícia"
   },
 
   "mainIncome": {
@@ -83,6 +88,34 @@
       { "cycleMonth": "2026-03", "amount": 100.00, "status": "UNPAID" }
     ]
   },
+
+  "reclassifiedIncomes": [
+    {
+      "description": "Exemplo de Income creditado na conta errada",
+      "amount": 5.00,
+      "occurredAt": "2026-01-03",
+      "persistedAccountSlug": "vale-alimentacao-exemplo",
+      "canonicalAccountSlug": "conta-corrente-exemplo",
+      "confidence": "CONFIRMED_BY_MEMORY",
+      "source": "exemplo — evidência conversacional anterior fictícia",
+      "note": "Exemplo de nota explicando por que este Income pertence a outra conta."
+    }
+  ],
+
+  "externalInstallmentPlans": [
+    { "description": "Exemplo de parcela externa", "installmentValue": 100.00, "paidInstallments": 2, "installmentCount": 5, "confidence": "CONFIRMED_BY_MEMORY", "source": "exemplo — evidência conversacional anterior fictícia" }
+  ],
+  "externalInstallmentsPaymentTiming": {
+    "exactDueDate": "UNKNOWN",
+    "paymentTiming": "GENERALLY_AFTER_SALARY",
+    "timingConfidence": "CONFIRMED_BY_MEMORY",
+    "note": "Exemplo — usuário informou que este pacote costuma ser pago depois do salário."
+  },
+
+  "householdBills": [
+    { "name": "Exemplo aluguel", "amount": 800.00, "status": "PAID", "cycleLabel": "current", "confidence": "CONFIRMED_BY_MEMORY" },
+    { "name": "Exemplo telefone", "amount": 40.00, "amountConfidence": "ESTIMATED", "status": "PENDING", "dueDateKnown": false, "confidence": "CONFIRMED_BY_MEMORY" }
+  ],
 
   "externalTransfers": [
     {
@@ -116,8 +149,6 @@
       "status": "AWAITING_INFORMATION"
     }
   ],
-
-  "externalInstallmentPlans": [],
 
   "legacyCsvPath": null,
 

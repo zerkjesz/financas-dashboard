@@ -81,6 +81,12 @@ async function testReadPathsNeverWrite() {
   });
   created.cards.push(card.id);
 
+  // Fase 5.0.3, item 19 — asOf fixo (não o relógio real), injetado nas
+  // chamadas abaixo. As asserções desta função não dependem do campo
+  // `status` de faturas projetadas (só de id/isPersisted/contagens), então
+  // isto é defensivo/consistência, não a correção de um flake real.
+  const FIXED_ASOF = new Date("2026-09-04T12:00:00.000Z");
+
   // Uma fatura PERSISTIDA de propósito (simula um pagamento real já feito) +
   // várias PROJECTED (nenhuma linha no banco) — a mistura é o cenário real do
   // item 8 do pedido.
@@ -103,10 +109,10 @@ async function testReadPathsNeverWrite() {
   // Bate repetidamente nas MESMAS funções que as rotas GET chamam — várias
   // vezes, simulando vários loads de /cartoes e do dashboard.
   for (let i = 0; i < 5; i++) {
-    await getCardBillView(card, currentCycle);
-    await getCardBillView(card, "2026-10"); // ciclo futuro, nunca persistido
-    await getCardBillView(card, "2026-11"); // idem
-    await listCardBillsView(card.id, { monthsBack: 1, monthsForward: 6 });
+    await getCardBillView(card, currentCycle, { now: FIXED_ASOF });
+    await getCardBillView(card, "2026-10", { now: FIXED_ASOF }); // ciclo futuro, nunca persistido
+    await getCardBillView(card, "2026-11", { now: FIXED_ASOF }); // idem
+    await listCardBillsView(card.id, { monthsBack: 1, monthsForward: 6, now: FIXED_ASOF });
   }
 
   const after = await fullDbSnapshot(card.id);
@@ -125,10 +131,10 @@ async function testReadPathsNeverWrite() {
 
   // E a view devolvida pro caller reflete a projeção corretamente (id: null,
   // isPersisted: false) mesmo sem nunca ter sido gravada.
-  const octView = await getCardBillView(card, "2026-10");
+  const octView = await getCardBillView(card, "2026-10", { now: FIXED_ASOF });
   check("view de outubro: id=null, isPersisted=false (é projeção, não persistida)", octView.id === null && octView.isPersisted === false, JSON.stringify({ id: octView.id, isPersisted: octView.isPersisted }));
 
-  const sepView = await getCardBillView(card, currentCycle);
+  const sepView = await getCardBillView(card, currentCycle, { now: FIXED_ASOF });
   check(
     "view de setembro: reflete a fatura PERSISTIDA de verdade (isPersisted=true, mesmo id)",
     sepView.isPersisted === true && sepView.id === persistedBill.id,
@@ -148,13 +154,15 @@ async function testProjectionWithoutPersistence() {
   });
   created.cards.push(card.id);
 
-  // Fase 5.0.2, item 18 — determinístico independente do dia real em que o
-  // teste roda: em vez de hardcodar "2026-09" como o ciclo atual (que quebra
-  // assim que o relógio real passa do dia 4 do mês e o ciclo "de hoje" vira o
-  // mês seguinte), computa o ciclo atual com a MESMA função pura que
-  // listCardBillsView usa internamente (getCardCycleForDate). A parcela
-  // sempre começa no ciclo atual de verdade, qualquer que seja a data real.
-  const firstCycle = getCardCycleForDate(card, new Date());
+  // Fase 5.0.3, item 19 — determinismo de VERDADE: um asOf FIXO e sintético
+  // (não o relógio real), passado explicitamente pra listCardBillsView/
+  // getCardBillView via clock injection (now = new Date() é só o default de
+  // produção — lib/cardBillCalculator.js aceita now injetável desde esta
+  // fase). O ciclo esperado é derivado deste MESMO asOf fixo com a função
+  // pura getCardCycleForDate — o teste nunca lê o relógio da máquina, então
+  // roda idêntico hoje, amanhã, ou em outro timezone.
+  const FIXED_ASOF = new Date("2026-09-04T12:00:00.000Z");
+  const firstCycle = getCardCycleForDate(card, FIXED_ASOF);
   const lastCycle = addMonthKeyLocal(firstCycle, 5); // 6 parcelas: firstCycle..firstCycle+5
 
   // Compra parcelada em 6x, iniciando no ciclo atual — todas as parcelas caem
@@ -181,7 +189,7 @@ async function testProjectionWithoutPersistence() {
   const beforeCount = await prisma.cardBill.count({ where: { cardId: card.id } });
   check("antes: zero CardBill persistida pra este cartão (nada foi materializado ainda)", beforeCount === 0, `contagem: ${beforeCount}`);
 
-  const view = await listCardBillsView(card.id, { monthsBack: 0, monthsForward: 6 });
+  const view = await listCardBillsView(card.id, { monthsBack: 0, monthsForward: 6, now: FIXED_ASOF });
   const firstBill = view.find((b) => b.cycleMonth === firstCycle);
   const lastBill = view.find((b) => b.cycleMonth === lastCycle);
 
