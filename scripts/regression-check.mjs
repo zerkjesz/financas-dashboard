@@ -120,6 +120,16 @@ function diff(baseline, current, path = "", out = []) {
       // Campos deliberadamente sensíveis ao tempo/ID de captura — não fazem parte da
       // regressão monetária, iam sempre "diferir" e não significam nada quebrado.
       if (["capturedAt", "id", "cardId", "createdAt", "updatedAt", "accountId"].includes(k)) continue;
+      // Fase 5.0.2, item 18 — "dias restantes até X" é relativo a `new Date()`
+      // no momento da captura (lib/vaPanel.js, lib/cashFlowProjection.js,
+      // lib/intelligence.js chamam new Date() internamente, sem now injetável).
+      // Um dia de calendário real passar entre o baseline e a checagem atual
+      // SEMPRE muda esses números em exatamente a mesma proporção do tempo
+      // decorrido — isso não é uma regressão monetária, é o relógio andando.
+      // Ignorado aqui (script de comparação), nunca na regra financeira em si.
+      // metaDiaria = balance / diasRestantes (lib/vaPanel.js) — puramente
+      // derivada do dia-contagem acima, mesma razão de exclusão.
+      if (["daysFromNow", "diasRestantes", "daysToVa", "summaryText", "summaryLines", "metaDiaria"].includes(k)) continue;
       diff(baseline[k], current[k], path ? `${path}.${k}` : k, out);
     }
     return out;
@@ -143,7 +153,7 @@ const differences = diff(baseline, current);
 
 console.log("--- Regressão Etapa 12: baseline (pré-migration) vs. estado atual ---\n");
 if (differences.length === 0) {
-  console.log("✅ ZERO diferenças (além de campos time-sensitive ignorados: capturedAt/id/createdAt/updatedAt/cardId/accountId).");
+  console.log("✅ ZERO diferenças (além de campos time-sensitive ignorados: capturedAt/id/createdAt/updatedAt/cardId/accountId/daysFromNow/diasRestantes/daysToVa/summaryText/summaryLines/metaDiaria).");
   console.log("   Todo campo monetário comparado bate EXATAMENTE (arredondado a 2 casas) com o baseline da Etapa 1.");
 } else {
   console.log(`❌ ${differences.length} diferença(s) encontrada(s):\n`);

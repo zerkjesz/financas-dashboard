@@ -31,6 +31,7 @@ import {
   auditPurchasesAgainstKnownBills,
   main,
 } from "./snapshot-dry-run.mjs";
+import { parseSemicolonCsv, auditCsvRows, reconstructExternalInstallmentCandidates } from "./lib/csvStagingAudit.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MARK = "TESTE_FASE5001";
@@ -423,6 +424,217 @@ console.log("--- Fase 5.0.1: testes sintéticos do snapshot-dry-run ---\n");
 
   check("main() do dry-run executou sem erro sobre input sintético", mainError === null, mainError?.message);
   check("fingerprint do banco (ids + updatedAt de todo model financeiro) idêntico antes/depois — ZERO write", JSON.stringify(before) === JSON.stringify(after));
+}
+
+// ============================================================================
+// I (Fase 5.0.2, item 1) — VA: raw ledger (com TODO Income persistido) é o
+// cenário PRINCIPAL; hypotheticalReclassifiedLedger (excluindo income
+// não-recarga) é só um "e se". Nunca excluir silenciosamente. Fixture REAL
+// no banco dev (assertTestEnvironment + cleanup), valores 100% fictícios.
+// ============================================================================
+{
+  const account = await prisma.account.create({ data: { slug: `teste-fase5002-va-${Date.now()}`, name: `[${MARK}] Conta restrita`, type: "food_voucher" } });
+  const rechargeDate = new Date("2026-01-01T00:00:00.000Z");
+  const income1 = await prisma.income.create({ data: { amount: money(1000), description: `[${MARK}] recarga`, accountId: account.id, occurredAt: rechargeDate } });
+  const income2 = await prisma.income.create({ data: { amount: money(15), description: `[${MARK}] pix de terceiro, sem menção à conta restrita`, accountId: account.id, occurredAt: new Date("2026-01-03T00:00:00.000Z") } });
+  const expense1 = await prisma.expense.create({ data: { amount: money(300), description: `[${MARK}] gasto`, accountId: account.id, occurredAt: new Date("2026-01-05T00:00:00.000Z") } });
+
+  try {
+    const result = await reconcileRestrictedLedger({
+      slug: account.slug,
+      recharge: { amount: 1000, date: "2026-01-01", confidence: "CONFIRMED" },
+      observedClosing: { amount: 400, date: "2026-01-15", confidence: "CONFIRMED" },
+    });
+    check("rawPersistedLedger.allKnownIncomeTotal inclui O TOTAL (1000+15=1015), nunca exclui o income extra silenciosamente", eq(result.rawPersistedLedger.allKnownIncomeTotal, 1015));
+    check("rawPersistedLedger.knownPersistedNetMovements = 1015-300 = 715", eq(result.rawPersistedLedger.knownPersistedNetMovements, 715));
+    check("rawPersistedLedger.rawUnexplainedDifference = 400-715 = -315 (é o delta PRINCIPAL)", eq(result.rawPersistedLedger.rawUnexplainedDifference, -315));
+    check("residualOpeningFromKnownLedger (campo principal) usa o RAW, não o hipotético", eq(result.residualOpeningFromKnownLedger, -315));
+    check("hypotheticalReclassifiedLedger existe separadamente (1000-300=700, 400-700=-300) mas NÃO é o principal", eq(result.hypotheticalReclassifiedLedger.knownNetMovementsExcludingNonRechargeIncome, 700) && eq(result.hypotheticalReclassifiedLedger.adjustedDifferenceIf22IncomeIsMisclassified, -300));
+    check("nonRechargeIncomeInvestigation identifica o income de 15 sem mutar nada", result.nonRechargeIncomeInvestigation.some((i) => eq(i.amount, 15)));
+  } finally {
+    await prisma.expense.delete({ where: { id: expense1.id } }).catch(() => {});
+    await prisma.income.deleteMany({ where: { id: { in: [income1.id, income2.id] } } }).catch(() => {});
+    await prisma.account.delete({ where: { id: account.id } }).catch(() => {});
+  }
+}
+
+// ============================================================================
+// J (Fase 5.0.2, item 2) — classificação LIKELY_MISCLASSIFIED/LIKELY_CORRECT/
+// UNKNOWN do income não-recarga, baseada em sinal genérico (menção à
+// keyword da conta restrita nos outros registros), nunca hardcoded.
+// ============================================================================
+{
+  const account = await prisma.account.create({ data: { slug: `teste-fase5002-keyword-${Date.now()}`, name: `[${MARK}] Conta restrita 2`, type: "food_voucher" } });
+  const rechargeDate = new Date("2026-01-01T00:00:00.000Z");
+  const income1 = await prisma.income.create({ data: { amount: money(500), description: `[${MARK}] recarga da conta exemplo`, accountId: account.id, occurredAt: rechargeDate } });
+  const incomeSuspicious = await prisma.income.create({ data: { amount: money(9), description: `[${MARK}] recebi um pix qualquer`, accountId: account.id, occurredAt: new Date("2026-01-02T00:00:00.000Z") } });
+  const expense1 = await prisma.expense.create({ data: { amount: money(10), description: `[${MARK}] gasto na conta exemplo`, accountId: account.id, occurredAt: new Date("2026-01-03T00:00:00.000Z") } });
+
+  try {
+    const result = await reconcileRestrictedLedger({
+      slug: account.slug,
+      restrictedKeyword: "conta exemplo",
+      recharge: { amount: 500, date: "2026-01-01", confidence: "CONFIRMED" },
+      observedClosing: { amount: 480, date: "2026-01-15", confidence: "CONFIRMED" },
+    });
+    const suspicious = result.nonRechargeIncomeInvestigation.find((i) => eq(i.amount, 9));
+    check("income sem a keyword, num universo onde os outros mencionam, é classificado LIKELY_MISCLASSIFIED (sinal, não prova)", suspicious?.classification === "LIKELY_MISCLASSIFIED");
+    check("classificação nunca é CONFIRMED/mutada — é só um sinal reportado", Array.isArray(suspicious?.reasons) && suspicious.reasons.length > 0);
+  } finally {
+    await prisma.expense.delete({ where: { id: expense1.id } }).catch(() => {});
+    await prisma.income.deleteMany({ where: { id: { in: [income1.id, incomeSuspicious.id] } } }).catch(() => {});
+    await prisma.account.delete({ where: { id: account.id } }).catch(() => {});
+  }
+}
+
+// ============================================================================
+// K (Fase 5.0.2, item 5) — parser CSV genérico: separador ";", BOM, decimal
+// brasileiro, campo entre aspas com quebra de linha. CSV 100% fictício.
+// ============================================================================
+{
+  const fakeCsv =
+    "﻿Data;Tipo;Valor;Categoria;Forma de pagamento;Fixo;Parcela;Descrição\n" +
+    '01/01/2026;Gasto;10,50;Outros;Pix;;;"comprei algo"\n' +
+    '02/01/2026;Gasto;20,00;Fatura Cartão de Crédito;Pix;;;"pagando fatura"\n' +
+    '03/01/2026;Gasto;30,00;Parcelas Cartão de Crédito;Pix;;2/5;"parcela exemplo 30 reais pix"\n' +
+    '04/01/2026;Receita;40,00;Outros;Pix;;;"recebi um pix com\n\ndescrição em duas linhas"\n';
+  const tmpCsv = path.join(HERE, `csv-teste-fase5002-${Date.now()}.csv`);
+  fs.writeFileSync(tmpCsv, fakeCsv, "utf8");
+  try {
+    const { header, rows } = auditCsvRows(tmpCsv);
+    check("header lido corretamente (8 colunas)", header.length === 8);
+    check("4 rows lidas, inclusive a de descrição multi-linha", rows.length === 4);
+    check("decimal brasileiro parseado corretamente (10,50 -> 10.50)", eq(rows[0].amount, 10.5));
+    check("categoria 'Fatura Cartão de Crédito' classificada CARD_BILL_PAYMENT com LEGACY_MODELING_ANOMALY", rows[1].likelySemanticEntity === "CARD_BILL_PAYMENT" && rows[1].anomalyFlags.some((f) => f.includes("LEGACY_MODELING_ANOMALY")));
+    check("row com Parcela '2/5' classificada EXTERNAL_INSTALLMENT, número/total extraídos", rows[2].likelySemanticEntity === "EXTERNAL_INSTALLMENT" && rows[2].installmentNumber === 2 && rows[2].installmentTotal === 5);
+    check("descrição multi-linha (quebra dentro de aspas) preservada como um único campo", rows[3].description.includes("duas linhas"));
+  } finally {
+    fs.unlinkSync(tmpCsv);
+  }
+}
+
+// ============================================================================
+// L (Fase 5.0.2, item 8/10) — reconstrução de candidatos de parcela externa:
+// posição projetada, ainda ativa vs completada (limite exato, sem off-by-one).
+// ============================================================================
+{
+  const rows = [
+    { likelySemanticEntity: "EXTERNAL_INSTALLMENT", description: "parcela exemplo A", amount: "50", date: "2026-01-01T00:00:00.000Z", cycleMonthOfRawDate: "2026-01", installmentNumber: 9, installmentTotal: 12 },
+    { likelySemanticEntity: "EXTERNAL_INSTALLMENT", description: "parcela exemplo B", amount: "20", date: "2026-01-01T00:00:00.000Z", cycleMonthOfRawDate: "2026-01", installmentNumber: 1, installmentTotal: 3 },
+  ];
+  // asOf = 2 meses depois -> A: 9+2=11 (<=12, ainda ativa); B: 1+2=3 (===total, ainda é a ÚLTIMA parcela, NÃO "já completada" — limite é > total, não >=).
+  const plans = reconstructExternalInstallmentCandidates(rows, { asOf: new Date("2026-03-01T00:00:00.000Z"), nextIncomeDate: new Date("2026-03-15T00:00:00.000Z") });
+  const planA = plans.find((p) => p.description === "parcela exemplo A");
+  const planB = plans.find((p) => p.description === "parcela exemplo B");
+  check("posição projetada de A = 9+2 = 11", planA.projectedPositionAtAsOf === 11);
+  check("A ainda ativa (11 <= 12)", planA.stillActiveCandidate === true && planA.likelyCompletedByAsOf === false);
+  check("posição projetada de B = 1+2 = 3 (última parcela, ainda DEVIDA agora — não 'já completada')", planB.projectedPositionAtAsOf === 3 && planB.stillActiveCandidate === true, "sem off-by-one: position===total não é 'completed'");
+  check("candidatas anteriores marcadas IMPLIED_BY_SEQUENCE_POSITION, nunca CONFIRMED por conta própria", planA.candidatePreviousInstallments.every((c) => c.status === "IMPLIED_BY_SEQUENCE_POSITION"));
+  check("candidatas futuras marcadas NEEDS_PAYMENT_EVIDENCE, nunca assumidas pagas", planA.candidateFutureInstallments.every((c) => c.status === "NEEDS_PAYMENT_EVIDENCE"));
+}
+
+// ============================================================================
+// M (Fase 5.0.2, item 9) — freeMoneyCompleteness cai pra PARTIAL quando existe
+// obrigação candidata material (CSV) ainda ativa, mesmo com todo o resto
+// conhecido — "não está no banco" != "não existe financeiramente".
+// ============================================================================
+{
+  const baseInput = {
+    asOf: "2026-01-15",
+    checkingAccount: { checkpointB: { amount: 1000 } },
+    card: { closingDay: 4, dueDay: 11, bills: [] },
+    confirmedCommitments: [],
+    contingencies: [],
+  };
+  const settings = { safetyMarginPercent: 10 };
+  const nextIncomeProposed = { expectedDate: new Date("2026-02-15T00:00:00.000Z"), status: "UPCOMING", isFallback: false };
+  const asOfDate = new Date("2026-01-15T00:00:00.000Z");
+
+  const withoutCsv = engineDryRun(baseInput, { nextIncomeProposed, nextIncomeFromDb: { status: "FALLBACK" }, appSettings: settings, asOf: asOfDate, csvAudit: { status: "NOT_PROVIDED" } });
+  check("sem candidatos externos: freeMoneyCompleteness = COMPLETE", withoutCsv.completeness.freeMoneyCompleteness === "COMPLETE");
+
+  const csvAuditWithMaterial = {
+    status: "AUDITED",
+    materialActiveExternalInstallmentCandidates: [
+      { description: "parcela exemplo", amountObservedPerInstallment: "50", observedInstallmentNumber: 5, totalInstallmentCount: 12, projectedPositionAtAsOf: 7, paymentStatusAsOf: "UNKNOWN_PAYMENT_STATUS", stillActiveCandidate: true, mayFallWithinCurrentHorizon: true, source: "csv_staging_evidence" },
+    ],
+  };
+  const withCsv = engineDryRun(baseInput, { nextIncomeProposed, nextIncomeFromDb: { status: "FALLBACK" }, appSettings: settings, asOf: asOfDate, csvAudit: csvAuditWithMaterial });
+  check("com 1 candidato material ativo: freeMoneyCompleteness = PARTIAL (nunca COMPLETE)", withCsv.completeness.freeMoneyCompleteness === "PARTIAL");
+  check("unresolvedPotentialCurrentObligations lista o candidato", withCsv.unresolvedPotentialCurrentObligations.length === 1);
+  check("freeMoney ainda É calculado (não vira INCOMPLETE) — só a COMPLETUDE é rebaixada", withCsv.freeMoney !== "INCOMPLETE");
+}
+
+// ============================================================================
+// N (Fase 5.0.2, item 16) — financialStatus.possibleWorseStatus: obrigações
+// desconhecidas só podem tornar a situação IGUAL ou PIOR, nunca melhor.
+// ============================================================================
+{
+  const input = {
+    asOf: "2026-01-15",
+    checkingAccount: { checkpointB: { amount: 500 } }, // caixa pequeno, próximo do limite
+    card: { closingDay: 4, dueDay: 11, bills: [] },
+    confirmedCommitments: [],
+    contingencies: [],
+  };
+  const settings = { safetyMarginPercent: 10 };
+  const nextIncomeProposed = { expectedDate: new Date("2026-02-15T00:00:00.000Z"), status: "UPCOMING", isFallback: false };
+  const asOfDate = new Date("2026-01-15T00:00:00.000Z");
+  // Worst-case (600) > caixa disponível (500) antes da renda -> deveria empurrar de APERTADO/TRANQUILO pra CRITICO no possibleWorseStatus.
+  const csvAuditWithBigMaterial = {
+    status: "AUDITED",
+    materialActiveExternalInstallmentCandidates: [
+      { description: "parcela grande", amountObservedPerInstallment: "600", observedInstallmentNumber: 1, totalInstallmentCount: 12, projectedPositionAtAsOf: 2, paymentStatusAsOf: "UNKNOWN_PAYMENT_STATUS", stillActiveCandidate: true, mayFallWithinCurrentHorizon: true, source: "csv_staging_evidence" },
+    ],
+  };
+  const result = engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb: { status: "FALLBACK" }, appSettings: settings, asOf: asOfDate, csvAudit: csvAuditWithBigMaterial });
+  check("financialStatus reporta possibleWorseStatus quando o worst-case pode mudar a classe", result.financialStatus.possibleWorseStatus != null);
+  check("possibleWorseStatus é IGUAL ou PIOR que o status conhecido, nunca melhor", ["TRANQUILO", "ATENCAO", "APERTADO", "CRITICO"].indexOf(result.financialStatus.possibleWorseStatus) >= ["TRANQUILO", "ATENCAO", "APERTADO", "CRITICO"].indexOf(result.financialStatus.status === "INDETERMINATE_NEEDS_FULL_PROJECTION" ? "TRANQUILO" : result.financialStatus.status));
+  check("financialStatusCompleteness = PARTIAL quando existe worst-case material, mesmo com status já decidido", result.completeness.financialStatusCompleteness === "PARTIAL");
+}
+
+// ============================================================================
+// O (Fase 5.0.2, item 4) — nextIncomeCommitment contra standard base: nunca
+// chamado de percentual real exato, denominador sempre explícito.
+// ============================================================================
+{
+  const input = {
+    asOf: "2026-01-15",
+    checkingAccount: { checkpointB: { amount: 1000 } },
+    card: { closingDay: 4, dueDay: 11, bills: [{ cycleMonth: "2026-02", amount: 100, status: "UNPAID" }] },
+    mainIncome: { amount: 2000, dayOfMonth: 15, standardRecurringAmount: 2000, standardRecurringAmountConfidence: "CONFIRMED", variablePayExpected: true },
+    confirmedCommitments: [],
+    contingencies: [],
+  };
+  const settings = { safetyMarginPercent: 10 };
+  const nextIncomeProposed = { expectedDate: new Date("2026-02-15T00:00:00.000Z"), status: "UPCOMING", isFallback: false };
+  const result = engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb: { status: "FALLBACK" }, appSettings: settings, asOf: new Date("2026-01-15T00:00:00.000Z") });
+  check("denominatorBasis = STANDARD_RECURRING_BASE (nunca inventa um valor 'real')", result.nextIncomeCommitment.denominatorBasis === "STANDARD_RECURRING_BASE");
+  check("actualNextIncomeAmountKnown = false sempre que o valor é só o padrão", result.nextIncomeCommitment.actualNextIncomeAmountKnown === false);
+  check("variablePayExpected propagado no resultado", result.nextIncomeCommitment.variablePayExpected === true);
+  check("nextIncomeCommitmentCompleteness = PARTIAL quando variablePayExpected=true, mesmo com padrão confirmado", result.completeness.nextIncomeCommitmentCompleteness === "PARTIAL");
+}
+
+// ============================================================================
+// P (Fase 5.0.2, item 3A/17) — movimento com classificação econômica
+// CONFIRMED vira CREATE Expense aprovado, sai da lista de blockers/UNRESOLVED.
+// ============================================================================
+{
+  const input = {
+    checkingAccount: {
+      checkpointA: { amount: 100, date: "2026-01-01", confidence: "CONFIRMED" },
+      movementsAfterCheckpointA: [
+        { type: "OUTFLOW", description: "pix exemplo confirmado", amount: 10, date: "2026-01-01", movementConfidence: "CONFIRMED", economicClassification: "EXPENSE", economicClassificationConfidence: "CONFIRMED", economicClassificationSource: "explicit user confirmation" },
+      ],
+      checkpointB: { amount: 90, date: "2026-01-01", confidence: "CONFIRMED" },
+    },
+  };
+  const checkingRecon = reconcileCheckingLedger(input.checkingAccount, { operationalHistoryStart: new Date("2026-01-01T00:00:00.000Z") });
+  const cardRecon = { persistedCardBillsClassified: [], usedLimitChecksum: { matches: true }, purchaseAudit: { status: "NONE_FOUND" } };
+  const mutations = buildProposedMutations(input, { card: { rows: [] } }, checkingRecon, { residualOpeningFromKnownLedger: "0" }, cardRecon);
+  const expenseMutation = mutations.find((m) => m.model === "Expense" && m.reference.includes("pix exemplo confirmado"));
+  check("movimento com classificação CONFIRMED gera CREATE Expense aprovado", expenseMutation?.category === "CREATE");
+  check("nenhuma mutation UNRESOLVED restante pra este movimento (não é mais blocker)", !mutations.some((m) => m.category === "UNRESOLVED" && m.reference.includes("pix exemplo confirmado")));
 }
 
 console.log(`\n${passed}/${results.length} teste(s) passaram.`);

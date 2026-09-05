@@ -35,6 +35,7 @@ import { computeFinancialStatus } from "../lib/financialStatus.js";
 import { computeCurrentObligationHorizonEnd } from "../lib/financialEngine.js";
 import { getAppSettings } from "../lib/settings.js";
 import { isValidConfidence } from "../lib/dataConfidence.js";
+import { computeFileHash, auditCsvRows, reconstructExternalInstallmentCandidates } from "./lib/csvStagingAudit.mjs";
 
 // Fase 5.0.1 — três estados de completude, usados em toda parte do engine
 // dry-run que depende de evidência parcial. Nunca usar um valor livre fora
@@ -118,6 +119,13 @@ function validateInput(input) {
 function d(s) {
   if (s == null) return null;
   return new Date(`${s}T00:00:00.000Z`);
+}
+
+function normalizeForKeywordCheck(s) {
+  return (s || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "");
 }
 
 // ============================================================================
@@ -360,29 +368,104 @@ async function reconcileRestrictedLedger(section) {
     }
   }
 
-  const knownNetMovements = knownConsumption != null ? subtractMoney(recharge, money(knownConsumption.total)) : null;
-  const residualOpeningFromKnownLedger = knownNetMovements != null ? subtractMoney(observedClosing, knownNetMovements) : null;
-  const unexplainedMagnitude = residualOpeningFromKnownLedger != null ? residualOpeningFromKnownLedger.abs() : null;
+  // Fase 5.0.2, item 1 — SEPARA dois cenários. A Fase 5.0.1 cometeu o erro de
+  // excluir silenciosamente qualquer Income que não batesse com o valor da
+  // recarga (o R$22 "extra" nunca entrava na conta). O cenário RAW (tudo que
+  // está de fato persistido, sem excluir nada) é o PRINCIPAL — o hipotético
+  // (excluindo o income não-recarga) só é reportado como o que SERIA se esse
+  // income se provar mal-classificado, nunca como o número padrão.
+  const allKnownIncomeTotal = section.slug ? sumMoney((await prisma.income.findMany({ where: { accountId: account?.id, occurredAt: { gte: d(section.recharge.date) } } })).map((i) => i.amount)) : null;
+  const knownExpensesTotal = knownConsumption != null ? money(knownConsumption.total) : null;
+
+  const rawKnownPersistedNetMovements = allKnownIncomeTotal != null && knownExpensesTotal != null ? subtractMoney(allKnownIncomeTotal, knownExpensesTotal) : null;
+  const rawUnexplainedDifference = rawKnownPersistedNetMovements != null ? subtractMoney(observedClosing, rawKnownPersistedNetMovements) : null;
+
+  const hypotheticalNetMovementsExcludingNonRechargeIncome = knownExpensesTotal != null ? subtractMoney(recharge, knownExpensesTotal) : null;
+  const adjustedDifferenceIf22IncomeIsMisclassified =
+    hypotheticalNetMovementsExcludingNonRechargeIncome != null ? subtractMoney(observedClosing, hypotheticalNetMovementsExcludingNonRechargeIncome) : null;
+
+  // Item 2 — investiga CADA Income não-recarga persistido na conta restrita,
+  // sem mutar nada. Heurística genérica (nunca hardcoded a um valor
+  // específico): a esmagadora maioria dos lançamentos LEGÍTIMOS desta conta
+  // menciona a palavra-chave da conta restrita na descrição (ex: "vale
+  // alimentação") — um Income que NÃO menciona, num universo onde os outros
+  // mencionam, é um sinal real (não prova) de possível classificação errada.
+  const nonRechargeIncomeInvestigation = [];
+  if (account) {
+    const restrictedKeyword = section.restrictedKeyword || "vale aliment";
+    const allAccountRecords = [...(knownConsumption?.items ?? [])];
+    const allIncomesInWindow = await prisma.income.findMany({ where: { accountId: account.id, occurredAt: { gte: d(section.recharge.date) } }, orderBy: { occurredAt: "asc" } });
+    const totalWithKeyword = [...allAccountRecords, ...allIncomesInWindow].filter((r) => normalizeForKeywordCheck(r.description).includes(normalizeForKeywordCheck(restrictedKeyword))).length;
+    const totalRecords = allAccountRecords.length + allIncomesInWindow.length;
+    for (const inc of allIncomesInWindow) {
+      if (compareMoney(money(inc.amount), recharge) === 0) continue; // é a própria recarga, não "não-recharge".
+      const mentionsKeyword = normalizeForKeywordCheck(inc.description).includes(normalizeForKeywordCheck(restrictedKeyword));
+      let classification = "UNKNOWN";
+      const reasons = [];
+      if (!mentionsKeyword && totalRecords > 0 && totalWithKeyword / totalRecords > 0.5) {
+        classification = "LIKELY_MISCLASSIFIED";
+        reasons.push(`${totalWithKeyword} de ${totalRecords} outros registros conhecidos desta conta mencionam "${restrictedKeyword}" na descrição — este NÃO menciona, sinal (não prova) de que pode ter caído na conta errada.`);
+      } else if (mentionsKeyword) {
+        classification = "LIKELY_CORRECT";
+        reasons.push(`Descrição menciona "${restrictedKeyword}", consistente com os demais lançamentos legítimos desta conta.`);
+      } else {
+        reasons.push("Sem sinal suficiente (nem a favor, nem contra) — permanece UNKNOWN.");
+      }
+      nonRechargeIncomeInvestigation.push({
+        id: inc.id,
+        description: inc.description,
+        occurredAt: inc.occurredAt.toISOString(),
+        accountId: inc.accountId,
+        category: inc.category,
+        source: inc.source,
+        confidence: inc.confidence,
+        createdAt: inc.createdAt.toISOString(),
+        amount: inc.amount.toString(),
+        classification,
+        reasons,
+      });
+    }
+  }
+
+  const unexplainedMagnitude = rawUnexplainedDifference != null ? rawUnexplainedDifference.abs() : null;
 
   return {
     account: account ? { id: account.id, slug: account.slug } : { status: "NOT_FOUND_IN_DB", slugSearched: section.slug ?? null },
     recharge: { amount: recharge.toString(), date: section.recharge.date, confidence: section.recharge.confidence },
     observedClosing: { amount: observedClosing.toString(), date: section.observedClosing.date, confidence: section.observedClosing.confidence },
     knownConsumptionFoundInDb: knownConsumption,
-    // Item 1 — nomenclatura corrigida: NUNCA "derivedOpeningBalance = recharge".
-    knownNetMovements: knownNetMovements?.toString() ?? null,
-    residualOpeningFromKnownLedger: residualOpeningFromKnownLedger?.toString() ?? null,
+    nonRechargeIncomeInvestigation,
+    // Item 1A — RAW: tudo que está persistido, SEM excluir nada. Este é o
+    // cenário PRINCIPAL.
+    rawPersistedLedger: {
+      allKnownIncomeTotal: allKnownIncomeTotal?.toString() ?? null,
+      knownExpensesTotal: knownExpensesTotal?.toString() ?? null,
+      knownPersistedNetMovements: rawKnownPersistedNetMovements?.toString() ?? null,
+      rawUnexplainedDifference: rawUnexplainedDifference?.toString() ?? null,
+    },
+    // Item 1B — hipotético: SOMENTE se o(s) Income(s) não-recarga se
+    // provar(em) mal-classificado(s). Nunca o número principal.
+    hypotheticalReclassifiedLedger: {
+      note: "Válido SOMENTE SE nonRechargeIncomeInvestigation classificar o(s) income(s) excluído(s) como LIKELY_MISCLASSIFIED com evidência suficiente — até lá, é hipotético, não adotado.",
+      knownNetMovementsExcludingNonRechargeIncome: hypotheticalNetMovementsExcludingNonRechargeIncome?.toString() ?? null,
+      adjustedDifferenceIf22IncomeIsMisclassified: adjustedDifferenceIf22IncomeIsMisclassified?.toString() ?? null,
+    },
+    // Nomenclatura corrigida: NUNCA "derivedOpeningBalance = recharge". Baseado
+    // agora no cenário RAW (principal), não no hipotético.
+    knownNetMovements: rawKnownPersistedNetMovements?.toString() ?? null,
+    residualOpeningFromKnownLedger: rawUnexplainedDifference?.toString() ?? null,
     derivedOpeningBalance: "INDETERMINATE",
     unexplainedOutflowsOrMissingEvidence: unexplainedMagnitude?.toString() ?? null,
     openingBalanceEvidence: "MISSING",
     // Mantido só por compatibilidade de leitura do relatório anterior — mesmo
-    // valor de residualOpeningFromKnownLedger, nome antigo não deve ser usado.
-    unexplainedDifferenceVA: residualOpeningFromKnownLedger?.toString() ?? null,
+    // valor de residualOpeningFromKnownLedger (agora RAW), nome antigo não
+    // deve ser usado em código novo.
+    unexplainedDifferenceVA: rawUnexplainedDifference?.toString() ?? null,
     reviewCandidates,
     investigationNote:
-      residualOpeningFromKnownLedger != null && !residualOpeningFromKnownLedger.isZero()
-        ? "Ledger conhecido está INCOMPLETO — o residual NÃO deve ser interpretado como a conta tendo ficado negativa, e sim como evidência de gasto/movimento real ainda não lançado no banco dev (ou lançado fora da janela consultada). " +
-          "NÃO convertido em ajuste automaticamente. Ver reviewCandidates para achados concretos desta investigação."
+      rawUnexplainedDifference != null && !rawUnexplainedDifference.isZero()
+        ? "Ledger conhecido (RAW, incluindo TODO Income persistido, sem excluir nada) está INCOMPLETO — o residual NÃO deve ser interpretado como a conta tendo ficado negativa, e sim como evidência de gasto/movimento real ainda não lançado no banco dev (ou lançado fora da janela consultada). " +
+          "NÃO convertido em ajuste automaticamente. Ver reviewCandidates e nonRechargeIncomeInvestigation para achados concretos desta investigação."
         : "N/A — sem base de comparação suficiente (nenhuma Expense encontrada na conta) ou diferença zero.",
     externalSourceInvestigation: {
       searchedRepositoryForCsv: true,
@@ -430,7 +513,7 @@ function confirmCardBillUniqueConstraint() {
 // informado contra QUALQUER known bill do input — não assume nada sobre
 // descrição/nome específico.
 // ============================================================================
-async function auditPurchasesAgainstKnownBills(cardInput, knownBillsByMonth) {
+async function auditPurchasesAgainstKnownBills(cardInput, knownBillsByMonth, csvAudit) {
   if (!cardInput?.slug) return { status: "MISSING_EVIDENCE", reason: "card.slug não informado — não é possível localizar Purchase" };
 
   const card = await prisma.card.findUnique({ where: { slug: cardInput.slug } });
@@ -481,7 +564,39 @@ async function auditPurchasesAgainstKnownBills(cardInput, knownBillsByMonth) {
     if (evidenceForReal.length > 0 && evidenceForTest.length === 0) conclusion = "LIKELY_REAL";
     else if (evidenceForReal.length > 0 && evidenceForTest.length > 0) conclusion = "UNKNOWN_PARTIAL_EXPLANATORY_POWER";
 
+    // Fase 5.0.2, item 12 — cruza contra o CSV legado (se auditado): a
+    // AUSÊNCIA de uma row correspondente no CSV só é informativa se o CSV
+    // realmente COBRE o período da compra — nunca tratada como evidência
+    // contra a realidade da Purchase se o CSV é de um período anterior.
+    let csvCrossCheck = { status: "NOT_APPLICABLE_NO_CSV" };
+    if (csvAudit?.status === "AUDITED") {
+      const csvDates = csvAudit.rows.map((r) => (r.date ? new Date(r.date) : null)).filter(Boolean);
+      const csvMin = csvDates.length ? new Date(Math.min(...csvDates.map((d) => d.getTime()))) : null;
+      const csvMax = csvDates.length ? new Date(Math.max(...csvDates.map((d) => d.getTime()))) : null;
+      const csvCoversPeriod = csvMin && csvMax && p.purchasedAt >= csvMin && p.purchasedAt <= csvMax;
+      if (!csvCoversPeriod) {
+        csvCrossCheck = {
+          status: "UNKNOWN",
+          classification: "NOT_APPLICABLE_CSV_PREDATES_OR_POSTDATES_PURCHASE",
+          note: `O CSV cobre ${csvMin?.toISOString().slice(0, 10)}..${csvMax?.toISOString().slice(0, 10)}; a Purchase é de ${p.purchasedAt.toISOString().slice(0, 10)}, fora dessa janela — ausência no CSV NÃO é evidência de artefato, o CSV simplesmente não cobre esta data.`,
+        };
+      } else {
+        const pDescNorm = p.description.toLowerCase();
+        const matches = csvAudit.rows.filter((r) => {
+          const rAmount = r.amount ? Number(r.amount) : null;
+          const amountMatches = rAmount != null && (Math.abs(rAmount - Number(p.installmentValue)) < 0.01 || Math.abs(rAmount - Number(p.totalAmount)) < 0.01);
+          return amountMatches;
+        });
+        if (matches.length > 0) {
+          csvCrossCheck = { status: "LIKELY_MATCH", classification: "LIKELY_MATCH", matchedRows: matches.map((m) => ({ rawDate: m.rawDate, amount: m.amount, description: m.description })), note: "Match por VALOR (parcela ou total) dentro do período coberto pelo CSV — não é matching só pelo valor genérico 60,60, cruza contra o período real também." };
+        } else {
+          csvCrossCheck = { status: "UNKNOWN", classification: "UNKNOWN", note: "CSV cobre o período, mas nenhuma row com valor compatível foi encontrada — não é evidência de artefato, só ausência de confirmação adicional." };
+        }
+      }
+    }
+
     return {
+      csvCrossCheck,
       purchase: {
         id: p.id,
         description: p.description,
@@ -578,7 +693,7 @@ function classifyPersistedCardBills(persistedBills, knownBillsByMonth) {
 // ============================================================================
 // N/O — Card reconciliation + persisted vs known CardBills (itens 6-8, 17-19)
 // ============================================================================
-async function reconcileCard(cardInput) {
+async function reconcileCard(cardInput, csvAudit) {
   if (!cardInput) return { status: "MISSING_EVIDENCE", reason: "card não informado no input" };
 
   const totalLimit = money(cardInput.totalLimit);
@@ -626,7 +741,7 @@ async function reconcileCard(cardInput) {
     }
   }
 
-  const purchaseAudit = await auditPurchasesAgainstKnownBills(cardInput, knownBillsByMonth);
+  const purchaseAudit = await auditPurchasesAgainstKnownBills(cardInput, knownBillsByMonth, csvAudit);
 
   // Item 8 — OBSERVED BILL TOTAL vs UNDERLYING PURCHASES EXPLAINED, por ciclo.
   const explainedByMonth = new Map();
@@ -711,6 +826,62 @@ function auditTransferSchemaForExternalScope() {
 }
 
 // ============================================================================
+// Fase 5.0.2, itens 0/5-8 — auditoria genérica read-only de um CSV legado
+// (STAGING/EVIDÊNCIA, nunca importado cegamente). O caminho vem de
+// input.legacyCsvPath (arquivo LOCAL, gitignored — nunca dentro do repo).
+// Se ausente/inexistente, retorna status explícito, nunca inventa conteúdo.
+// ============================================================================
+function auditLegacyCsv(input, { asOf, nextIncomeDate, operationalHistoryStart, vaHistoryStart }) {
+  const csvPath = input.legacyCsvPath;
+  if (!csvPath) return { status: "NOT_PROVIDED", note: "input.legacyCsvPath não informado — nenhuma fonte histórica externa a auditar nesta rodada." };
+  if (!fs.existsSync(csvPath)) return { status: "FILE_NOT_FOUND", pathSearched: csvPath };
+
+  const hash = computeFileHash(csvPath);
+  const { header, rows } = auditCsvRows(csvPath);
+
+  const operationalCutoff = operationalHistoryStart;
+  const vaCutoff = vaHistoryStart;
+  const rowsWithCutoffFlags = rows.map((r) => {
+    const rowDate = r.date ? new Date(r.date) : null;
+    return {
+      ...r,
+      isBeforeOperationalCutoff: rowDate && operationalCutoff ? rowDate < operationalCutoff : null,
+      isBeforeVaCutoff: rowDate && vaCutoff ? rowDate < vaCutoff : null,
+    };
+  });
+
+  const cardBillPaymentAnomalies = rowsWithCutoffFlags.filter((r) => r.likelySemanticEntity === "CARD_BILL_PAYMENT");
+  const possibleTotalValueInstallmentPurchases = rowsWithCutoffFlags.filter((r) => r.likelySemanticEntity === "CARD_PURCHASE_POSSIBLY_INSTALLMENT");
+  const cardPurchases = rowsWithCutoffFlags.filter((r) => r.likelySemanticEntity === "CARD_PURCHASE" || r.likelySemanticEntity === "CARD_PURCHASE_POSSIBLY_INSTALLMENT");
+  const vaRows = rowsWithCutoffFlags.filter((r) => r.likelySemanticEntity === "VA_INCOME" || r.likelySemanticEntity === "VA_EXPENSE");
+  const vaRowsAfterCutoff = vaRows.filter((r) => r.isBeforeVaCutoff === false);
+  const vaRowsBeforeCutoff = vaRows.filter((r) => r.isBeforeVaCutoff !== false);
+
+  const externalInstallmentCandidates = reconstructExternalInstallmentCandidates(rowsWithCutoffFlags, { asOf, nextIncomeDate });
+  const materialActiveCandidates = externalInstallmentCandidates.filter((p) => p.stillActiveCandidate);
+
+  return {
+    status: "AUDITED",
+    file: { path: csvPath, sha256: hash.sha256, bytes: hash.bytes, preservedOriginalUnmodified: true },
+    header,
+    rowCount: rows.length,
+    disclaimer: "STAGING/EVIDÊNCIA — NÃO importado cegamente. Datas podem refletir backfill, não o dia real do evento. Ver anomalyFlags por row.",
+    rows: rowsWithCutoffFlags,
+    cardBillPaymentAnomalies: cardBillPaymentAnomalies.map((r) => ({ rawDate: r.rawDate, amount: r.amount, category: r.category, description: r.description, classification: "LEGACY_MODELING_ANOMALY", note: "Pagamento de fatura registrado como Gasto no Norte antigo — NÃO importar como Expense operacional; reforça que pagamento de fatura != Expense." })),
+    possibleTotalValueInstallmentPurchases,
+    cardPurchases,
+    vaHistoricalEvidence: {
+      note: "A maioria dos movimentos de VA no CSV é ANTERIOR ao cutoff atual (vaHistoryStart) — usados só como HISTORICAL/STAGING EVIDENCE (padrões, não fatos operacionais do ciclo atual). NÃO usados automaticamente para explicar o saldo de 04/09.",
+      rowsBeforeCutoff: vaRowsBeforeCutoff.length,
+      rowsAfterCutoff: vaRowsAfterCutoff.length,
+      rowsAfterCutoffDetail: vaRowsAfterCutoff,
+    },
+    externalInstallmentCandidates,
+    materialActiveExternalInstallmentCandidates: materialActiveCandidates,
+  };
+}
+
+// ============================================================================
 // W — Financial Engine dry-run (item 24, corrigido pelo item 9 da Fase 5.0.1)
 // — 100% em memória, sobre o ESTADO CANÔNICO PROPOSTO (input), NUNCA sobre a
 // ausência de rows V2 no banco (isso mediria "o que já foi persistido", não
@@ -723,10 +894,28 @@ function addDaysUtc(date, days) {
   return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
 }
 
-function engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings, asOf }) {
+function engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings, asOf, csvAudit }) {
   const missing = [];
   const HORIZON_DAYS = 90;
   const horizonEnd = addDaysUtc(asOf, HORIZON_DAYS);
+
+  // Fase 5.0.2, item 9 — candidatos de ExternalInstallment reconstruídos do
+  // CSV legado que AINDA poderiam ser obrigação corrente real, mas cujo
+  // status de pagamento é DESCONHECIDO. "Não está no banco" != "não existe
+  // financeiramente" — a mera ausência de uma row ExternalInstallment
+  // persistida NUNCA autoriza freeMoneyCompleteness=COMPLETE se este material
+  // existir.
+  const unresolvedPotentialCurrentObligations = (csvAudit?.materialActiveExternalInstallmentCandidates || [])
+    .filter((p) => p.mayFallWithinCurrentHorizon)
+    .map((p) => ({
+      description: p.description,
+      amountObservedPerInstallment: p.amountObservedPerInstallment,
+      observedInstallmentNumber: p.observedInstallmentNumber,
+      totalInstallmentCount: p.totalInstallmentCount,
+      projectedPositionAtAsOf: p.projectedPositionAtAsOf,
+      paymentStatusAsOf: p.paymentStatusAsOf,
+      source: p.source,
+    }));
 
   // --- balances ---
   const unrestrictedCash = input.checkingAccount ? money(input.checkingAccount.checkpointB.amount) : null;
@@ -855,20 +1044,37 @@ function engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings
     };
   });
 
-  // --- recurring income: SCHEDULE evidence separada de AMOUNT evidence (item 16) ---
+  // --- recurring income: SCHEDULE evidence separada de AMOUNT evidence (item
+  // 16 da Fase 5.0.1 / item 3C-4 da Fase 5.0.2) ---
   // dayOfMonth vem do input (schedule) — CONFIRMED_BY_MEMORY por padrão (só 1
-  // ocorrência histórica sustenta a cadência). O VALOR recorrente futuro só é
-  // usado se input.mainIncome.recurringAmountConfidence vier explicitamente
-  // preenchido — na ausência disso, o valor recorrente é UNKNOWN e NENHUM
-  // denominador é inventado pra committedPercent.
+  // ocorrência histórica sustenta a cadência). O valor PADRÃO/BASE
+  // (standardRecurringAmount) é uma evidência distinta da ocorrência REAL da
+  // próxima renda — mesmo com o padrão confirmado, a próxima ocorrência real
+  // pode ser MAIOR (ex: horas extras variáveis) e seu valor exato permanece
+  // UNKNOWN até realmente acontecer. NUNCA tratamos standardRecurringAmount
+  // como se fosse a certeza do valor real da próxima ocorrência.
   const scheduleConfidence = input.mainIncome?.scheduleConfidence ?? (input.mainIncome ? "CONFIRMED_BY_MEMORY" : null);
-  const recurringAmountConfidence = input.mainIncome?.recurringAmountConfidence ?? null;
-  const expectedRecurringAmount = recurringAmountConfidence != null ? money(input.mainIncome.amount) : null;
+  const standardRecurringAmountConfidence = input.mainIncome?.standardRecurringAmountConfidence ?? null;
+  const standardRecurringAmount = standardRecurringAmountConfidence != null && input.mainIncome?.standardRecurringAmount != null ? money(input.mainIncome.standardRecurringAmount) : null;
+  const variablePayExpected = input.mainIncome?.variablePayExpected ?? false;
+  // expectedRecurringAmount só é usado pra INSERIR um evento na timeline física
+  // (afeta checkpoints de caixa) — aqui SIM precisamos ser conservadores: se o
+  // valor real tende a ser MAIOR (variablePayExpected), inserir o padrão na
+  // timeline já é uma estimativa razoável (nunca superestima o caixa
+  // disponível) — mas o denominador do nextIncomeCommitment (item 4) usa o
+  // MESMO valor, com metadata deixando claríssimo que é o padrão, não o real.
+  const expectedRecurringAmount = standardRecurringAmount;
   if (input.mainIncome && expectedRecurringAmount == null) {
     missing.push({
-      field: "mainIncome.recurringAmountConfidence",
-      impact: "schedule (dia do mês) é conhecido, mas o VALOR de ocorrências futuras não está confirmado — nextIncomeCommitment.committedPercent e os checkpoints de projeção após a próxima renda ficam PARTIAL",
-      evidenceNeeded: "confirmação explícita de que o valor recorrente futuro é o mesmo da última ocorrência observada",
+      field: "mainIncome.standardRecurringAmountConfidence",
+      impact: "schedule (dia do mês) é conhecido, mas nem o valor padrão nem o valor real da próxima ocorrência estão confirmados — nextIncomeCommitment.committedPercent e os checkpoints de projeção após a próxima renda ficam PARTIAL",
+      evidenceNeeded: "confirmação explícita do valor padrão/base recorrente",
+    });
+  } else if (variablePayExpected) {
+    missing.push({
+      field: "mainIncome.nextOccurrenceActualAmount",
+      impact: "valor PADRÃO confirmado, mas a próxima ocorrência real tende a ser MAIOR (pagamento variável esperado) — qualquer percentual/checkpoint calculado contra o padrão tende a SUPERESTIMAR o comprometimento real",
+      evidenceNeeded: "valor real da ocorrência, disponível só depois que ela acontecer",
     });
   }
 
@@ -880,11 +1086,15 @@ function engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings
     let occ = nextIncomeProposed.expectedDate;
     while (occ <= horizonEnd) {
       incomeScheduleEvents.push({ date: occ.toISOString(), amountKnown: expectedRecurringAmount != null });
-      if (expectedRecurringAmount != null) timelineEvents.push({ date: occ, amount: expectedRecurringAmount, label: "Renda principal (recorrência proposta)", kind: "recurring_income" });
+      if (expectedRecurringAmount != null) timelineEvents.push({ date: occ, amount: expectedRecurringAmount, label: "Renda principal (padrão/base, valor real pode ser maior)", kind: "recurring_income" });
       occ = new Date(Date.UTC(occ.getUTCFullYear(), occ.getUTCMonth() + 1, occ.getUTCDate()));
     }
   }
-  const projectionCrossesUnknownIncomeAmount = incomeScheduleEvents.some((e) => !e.amountKnown);
+  // variablePayExpected mantém a projeção PARTIAL mesmo com o padrão
+  // confirmado, porque o padrão subestima sistematicamente o caixa real
+  // esperado (o valor de verdade tende a ser maior) — nunca tratamos isso
+  // como equivalente a "valor totalmente conhecido".
+  const projectionCrossesUnknownIncomeAmount = incomeScheduleEvents.some((e) => !e.amountKnown) || (incomeScheduleEvents.length > 0 && variablePayExpected);
 
   const canComputeFreeMoney = unrestrictedCash != null;
   const freeMoney = canComputeFreeMoney
@@ -926,17 +1136,28 @@ function engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings
     const committedAmount = sumMoney(
       sortedTimeline.filter((e) => e.kind !== "recurring_income" && isWithinNextIncomeCommitmentWindow(e.date, periodStart, periodEnd)).map((e) => e.amount.negated())
     );
-    const committedPercent =
+    // Fase 5.0.2, item 4 — agora existe um denominador-BASE confirmado
+    // (standardRecurringAmount), mas isso NUNCA é chamado de "percentual exato
+    // da renda real de 24/09" — é explicitamente committedPercentAgainstStandardBase,
+    // com metadata deixando claro que o valor real pode ser maior (pagamento
+    // variável esperado), o que tornaria o percentual real FINAL menor que este.
+    const committedPercentAgainstStandardBase =
       expectedRecurringAmount != null && isPositive(expectedRecurringAmount)
         ? multiplyMoney(divideMoney(committedAmount, expectedRecurringAmount), 100)
-        : null; // nunca inventa denominador (item 16).
+        : null; // nunca inventa denominador.
     nextIncomeCommitmentWindow = {
       periodStart: periodStart.toISOString(),
       periodEnd: periodEnd.toISOString(),
-      expectedIncomeAmount: expectedRecurringAmount?.toString() ?? "UNKNOWN",
       committedAmount: committedAmount.toString(),
-      committedPercent: committedPercent != null ? committedPercent.toString() : null,
-      completeness: expectedRecurringAmount != null ? COMPLETENESS.COMPLETE : COMPLETENESS.PARTIAL,
+      denominatorBasis: expectedRecurringAmount != null ? "STANDARD_RECURRING_BASE" : "UNKNOWN",
+      denominatorAmount: expectedRecurringAmount?.toString() ?? null,
+      actualNextIncomeAmountKnown: false,
+      variablePayExpected,
+      committedPercentAgainstStandardBase: committedPercentAgainstStandardBase != null ? committedPercentAgainstStandardBase.toString() : null,
+      note: variablePayExpected
+        ? "Como a renda real de 24/09 tende a ser MAIOR que o padrão (pagamento variável esperado), o percentual comprometido REAL final tende a ser MENOR que committedPercentAgainstStandardBase."
+        : null,
+      completeness: expectedRecurringAmount != null && !variablePayExpected ? COMPLETENESS.COMPLETE : COMPLETENESS.PARTIAL,
     };
   }
 
@@ -971,16 +1192,52 @@ function engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings
         evidenceNeeded: "projeção expected/stress completa (pós-persistência)",
       });
     }
+
+    // Fase 5.0.2, item 16 — floor/severity mínima: se existem obrigações
+    // externas DESCONHECIDAS (candidatos do CSV) que só poderiam tornar a
+    // situação PIOR (nunca melhor — uma obrigação real some do nosso
+    // conhecimento, nunca "aparece dinheiro"), calcula um worst-case
+    // (soma de todos os valores por parcela dos candidatos ativos) e testa se
+    // isso derrubaria o status pra uma classe mais severa. NUNCA declara
+    // COMPLETE quando esse worst-case pode mudar a classe.
+    if (unresolvedPotentialCurrentObligations.length > 0) {
+      const worstCaseAdditional = sumMoney(unresolvedPotentialCurrentObligations.map((o) => money(o.amountObservedPerInstallment)));
+      const worstCaseFreeMoney = subtractMoney(freeMoney, worstCaseAdditional);
+      const worstCaseMinBaseCash = minBaseCashBeforeIncome != null ? subtractMoney(minBaseCashBeforeIncome, worstCaseAdditional) : null;
+      let possibleWorseStatus = financialStatus.status;
+      if (worstCaseMinBaseCash != null && isNegative(worstCaseMinBaseCash)) {
+        possibleWorseStatus = "CRITICO";
+      } else if (isNegative(worstCaseFreeMoney) && financialStatus.status !== "APERTADO" && financialStatus.status !== "CRITICO") {
+        possibleWorseStatus = "APERTADO";
+      }
+      financialStatus.possibleWorseStatus = possibleWorseStatus;
+      financialStatus.worstCaseAdditionalObligation = worstCaseAdditional.toString();
+      financialStatus.worstCaseNote =
+        possibleWorseStatus !== financialStatus.status
+          ? `Se os ${unresolvedPotentialCurrentObligations.length} candidato(s) de parcela externa (CSV) ainda estiverem ativos e devidos, o status poderia piorar de ${financialStatus.status} para ${possibleWorseStatus}. Não inventado como worst-case automático — reportado como possibilidade, dado o material desconhecido.`
+          : `Mesmo no pior caso (todas as parcelas candidatas ainda ativas somadas), o status permanece ${financialStatus.status}.`;
+      financialStatusCompleteness = COMPLETENESS.PARTIAL; // material desconhecido impede COMPLETE, mesmo quando o status já veio do branch CRITICO/APERTADO.
+    }
   }
 
-  // --- completeness granular (item 10) ---
-  const freeMoneyCompleteness = freeMoney != null ? COMPLETENESS.COMPLETE : COMPLETENESS.INCOMPLETE;
+  // --- completeness granular (item 10, ajustado pelo item 9 da Fase 5.0.2) ---
+  // freeMoney NUNCA pode ser COMPLETE se existir material desconhecido
+  // (candidatos de ExternalInstallment do CSV, ainda ativos, cujo status de
+  // pagamento é UNKNOWN) capaz de alterar currentHorizonObligations.
+  const freeMoneyCompleteness = freeMoney == null ? COMPLETENESS.INCOMPLETE : unresolvedPotentialCurrentObligations.length > 0 ? COMPLETENESS.PARTIAL : COMPLETENESS.COMPLETE;
   const safeToSpendCompleteness = freeMoneyCompleteness;
   const baseProjectionCompleteness = !baseProjectionLite ? COMPLETENESS.INCOMPLETE : projectionCrossesUnknownIncomeAmount ? COMPLETENESS.PARTIAL : COMPLETENESS.COMPLETE;
   const expectedProjectionCompleteness =
     baseProjectionCompleteness === COMPLETENESS.INCOMPLETE ? COMPLETENESS.INCOMPLETE : undatedRiskExposures.length > 0 || projectionCrossesUnknownIncomeAmount ? COMPLETENESS.PARTIAL : COMPLETENESS.COMPLETE;
   const stressProjectionCompleteness = expectedProjectionCompleteness;
-  const nextIncomeCompleteness = !nextIncomeProposed.expectedDate ? COMPLETENESS.INCOMPLETE : expectedRecurringAmount != null ? COMPLETENESS.COMPLETE : COMPLETENESS.PARTIAL;
+  // COMPLETE exige data conhecida E valor real conhecido com certeza — um
+  // valor PADRÃO/BASE quando variablePayExpected=true ainda deixa o valor
+  // real incerto, então fica PARTIAL mesmo com o padrão confirmado.
+  const nextIncomeCompleteness = !nextIncomeProposed.expectedDate
+    ? COMPLETENESS.INCOMPLETE
+    : expectedRecurringAmount != null && !variablePayExpected
+      ? COMPLETENESS.COMPLETE
+      : COMPLETENESS.PARTIAL;
   const nextIncomeCommitmentCompleteness = nextIncomeCommitmentWindow?.completeness ?? COMPLETENESS.INCOMPLETE;
 
   const componentCompletenesses = [
@@ -1021,13 +1278,16 @@ function engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings
         status: nextIncomeProposed.status,
         isFallback: nextIncomeProposed.isFallback,
         scheduleConfidence,
-        recurringAmountConfidence,
-        expectedRecurringAmount: expectedRecurringAmount?.toString() ?? "UNKNOWN",
-        note: "Schedule (dia do mês) e AMOUNT recorrente são evidências SEPARADAS — o valor só é usado se recurringAmountConfidence vier explicitamente confirmado no input. RecurringRule ainda NÃO existe no banco (hipotético, não persistido).",
+        standardRecurringAmountConfidence,
+        standardRecurringAmount: standardRecurringAmount?.toString() ?? "UNKNOWN",
+        variablePayExpected,
+        nextOccurrenceActualAmount: "UNKNOWN",
+        note: "Schedule (dia do mês) e AMOUNT são evidências SEPARADAS. standardRecurringAmount é o valor PADRÃO/BASE confirmado — NÃO é o valor real da próxima ocorrência, que permanece UNKNOWN até acontecer (tende a ser MAIOR se variablePayExpected=true). RecurringRule ainda NÃO existe no banco (hipotético, não persistido).",
       },
     },
     nextIncomeCommitment: nextIncomeCommitmentWindow,
     contingencyExposure: { expected: contingencyExpected.toString(), maximum: contingencyMax.toString(), items: contingencyItems, undatedRiskExposures, entersFreeMoneyBase: false },
+    unresolvedPotentialCurrentObligations,
     minBaseCashBeforeNextIncome: minBaseCashBeforeIncome?.toString() ?? null,
     baseTimeline: timelineWithBalances,
     financialStatus,
@@ -1272,6 +1532,19 @@ function buildProposedMutations(input, inventory, checkingRecon, vaRecon, cardRe
         riskOfDoubleCounting: "risco real se uma Reserve pessoal para a mesma finalidade for criada em paralelo — NÃO criar Reserve pessoal pra este valor (ele já saiu fisicamente da conta).",
         requiredToClose: true,
       });
+    } else if (m.economicClassification === "EXPENSE" && m.economicClassificationConfidence === "CONFIRMED") {
+      push({
+        category: "CREATE",
+        model: "Expense",
+        reference: m.description,
+        before: "N/A",
+        after: `Expense — accountId=<conta informada>, amount=${money(m.amount).toString()}, category=<inspecionar categorias já existentes no schema antes de escolher; usar categoria genérica coerente já adotada, sem criar taxonomia nova>`,
+        reason: `Classificação econômica confirmada explicitamente pelo usuário (${m.economicClassificationSource || "confirmação explícita"}) — não é mais um blocker.`,
+        source: "input do usuário (confirmação explícita)",
+        confidence: m.economicClassificationConfidence,
+        risk: "baixo",
+        requiredToClose: true,
+      });
     } else if (m.economicClassification === "UNKNOWN") {
       push({
         category: "UNRESOLVED",
@@ -1290,13 +1563,14 @@ function buildProposedMutations(input, inventory, checkingRecon, vaRecon, cardRe
   }
 
   if (input.mainIncome) {
+    const hasStandardAmount = input.mainIncome.standardRecurringAmountConfidence != null && input.mainIncome.standardRecurringAmount != null;
     push({
       category: "LINK",
       model: "RecurringRule (proposta) + Income.recurringOccurrenceDate",
       reference: `renda principal informada no input (dayOfMonth=${input.mainIncome.dayOfMonth})`,
       before: "Nenhuma RecurringRule cobrindo essa renda existe hoje no banco (ver seção Q)",
-      after: `RecurringRule{ kind:'income', dayOfMonth:${input.mainIncome.dayOfMonth} } (SEM amount fixo, salvo recurringAmountConfidence confirmado — ver seção Q) + Income vinculado via recurringOccurrenceDate=${input.mainIncome.date}`,
-      reason: "Formaliza a renda principal, hoje invisível pro Financial Engine (que cai em FALLBACK sem ela). Schedule (dia do mês) e amount recorrente são evidências separadas — ver seção Q.",
+      after: `RecurringRule{ kind:'income', dayOfMonth:${input.mainIncome.dayOfMonth}${hasStandardAmount ? `, amount:${money(input.mainIncome.standardRecurringAmount).toString()} (padrão/base, valor real da ocorrência pode ser maior)` : " (sem amount fixo — valor padrão ainda não confirmado)"} } + Income vinculado via recurringOccurrenceDate=${input.mainIncome.date}`,
+      reason: "Formaliza a renda principal, hoje invisível pro Financial Engine (que cai em FALLBACK sem ela). Schedule (dia do mês) e amount padrão/base são evidências separadas do valor REAL de cada ocorrência futura — ver seção Q.",
       source: "input do usuário",
       confidence: input.mainIncome.confidence,
       risk: "baixo",
@@ -1453,6 +1727,12 @@ function collectBlockers({ input, checkingRecon, vaRecon, engineResult, cardReco
   if (schemaAudit?.conclusion?.startsWith("GAP_DE_MODELAGEM: NENHUM") === false) {
     blockers.push({ area: "Escopo de conta externa (schema)", description: schemaAudit?.conclusion ?? "Ver seção R." });
   }
+  for (const o of engineResult.unresolvedPotentialCurrentObligations || []) {
+    blockers.push({
+      area: `Parcela externa candidata (CSV): ${o.description}`,
+      description: `Posição observada ${o.observedInstallmentNumber}/${o.totalInstallmentCount}, projetada para ${o.projectedPositionAtAsOf}/${o.totalInstallmentCount} em asOf — status de pagamento ${o.paymentStatusAsOf}. Material o suficiente pra impedir freeMoneyCompleteness=COMPLETE.`,
+    });
+  }
   return blockers;
 }
 
@@ -1468,7 +1748,6 @@ async function main() {
 
   const checkingRecon = reconcileCheckingLedger(input.checkingAccount, { operationalHistoryStart: settings.operationalHistoryStart });
   const vaRecon = await reconcileRestrictedLedger(input.restrictedAccount);
-  const cardRecon = await reconcileCard(input.card);
   const schemaAudit = auditTransferSchemaForExternalScope();
 
   const nextIncomeFromDbRaw = await resolveNextExpectedIncomeFromDb({ now: d(input.asOf) });
@@ -1480,7 +1759,16 @@ async function main() {
     nextIncomeProposed = resolveNextExpectedIncome({ now: d(input.asOf), recurringRules: [syntheticRule], realizedIncomes: [], accounts: [], settings });
   }
 
-  const engineResult = engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings: settings, asOf: d(input.asOf) });
+  const csvAudit = auditLegacyCsv(input, {
+    asOf: d(input.asOf),
+    nextIncomeDate: nextIncomeProposed.expectedDate,
+    operationalHistoryStart: settings.operationalHistoryStart,
+    vaHistoryStart: settings.vaHistoryStart,
+  });
+
+  const cardRecon = await reconcileCard(input.card, csvAudit);
+
+  const engineResult = engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings: settings, asOf: d(input.asOf), csvAudit });
   const confidenceMatrix = buildConfidenceMatrix(input);
   const proposedCanonicalSnapshot = buildProposedCanonicalSnapshot(input, cardRecon);
   const proposedMutations = buildProposedMutations(input, inventory, checkingRecon, vaRecon, cardRecon);
@@ -1507,8 +1795,14 @@ async function main() {
     I_derivedOpeningBalanceCheckingAccount: checkingRecon.derivedOpeningBalance,
     J_evidencedOpeningBalanceCheckingAccount: checkingRecon.derivedOpeningBalance.openingBalanceEvidence === "EVIDENCED" ? checkingRecon.derivedOpeningBalance : { status: "NONE", reason: "Sem evidência independente (extrato completo do período) fornecida a este dry-run." },
     // Item 1 — K/L/M corrigidos: derivedOpeningBalance NUNCA é a recarga.
+    // Item 1A/1B — rawPersistedLedger é o cenário PRINCIPAL,
+    // hypotheticalReclassifiedLedger só é adotado se a investigação do R$
+    // não-recarga confirmar má-classificação com evidência suficiente.
     K_restrictedAccountLedgerCandidate: vaRecon,
     L_restrictedAccountReconciliation: {
+      rawPersistedLedger: vaRecon.rawPersistedLedger,
+      hypotheticalReclassifiedLedger: vaRecon.hypotheticalReclassifiedLedger,
+      nonRechargeIncomeInvestigation: vaRecon.nonRechargeIncomeInvestigation,
       knownNetMovements: vaRecon.knownNetMovements,
       residualOpeningFromKnownLedger: vaRecon.residualOpeningFromKnownLedger,
       derivedOpeningBalance: vaRecon.derivedOpeningBalance,
@@ -1526,16 +1820,24 @@ async function main() {
       cardBillUniqueConstraint: cardRecon.cardBillUniqueConstraint,
       observedVsUnderlyingPurchasesExplained: cardRecon.observedVsUnderlyingPurchasesExplained,
     },
-    P_externalInstallments: (input.externalInstallmentPlans || []).length > 0 ? input.externalInstallmentPlans : { status: "MISSING_EVIDENCE", note: "Nenhum plano com evidência suficiente informado neste snapshot." },
+    P_externalInstallments:
+      (csvAudit.externalInstallmentCandidates || []).length > 0
+        ? { source: "csv_staging_evidence", candidates: csvAudit.externalInstallmentCandidates, materialActiveCandidates: csvAudit.materialActiveExternalInstallmentCandidates }
+        : (input.externalInstallmentPlans || []).length > 0
+          ? input.externalInstallmentPlans
+          : { status: "MISSING_EVIDENCE", note: "Nenhum plano com evidência suficiente informado neste snapshot." },
+    Z_legacyCsvStagingAudit: csvAudit,
     P2_purchaseAudit: cardRecon.purchaseAudit,
     Q_recurringIncomeProposal: {
       currentDbState: nextIncomeFromDb,
       proposedScheduleOnly: input.mainIncome
         ? { kind: "income", dayOfMonth: input.mainIncome.dayOfMonth, scheduleConfidence: engineResult.nextIncome.proposedIfScheduleRuleExisted.scheduleConfidence, occurrenceToLink: input.mainIncome.date, occurrenceAmount: money(input.mainIncome.amount).toString(), occurrenceAmountConfidence: input.mainIncome.confidence }
         : { status: "MISSING_EVIDENCE" },
-      expectedRecurringAmount: engineResult.nextIncome.proposedIfScheduleRuleExisted.expectedRecurringAmount,
-      recurringAmountConfidence: engineResult.nextIncome.proposedIfScheduleRuleExisted.recurringAmountConfidence,
-      note: "Schedule (dayOfMonth) e AMOUNT recorrente futuro são evidências SEPARADAS (item 16) — o valor observado em UMA ocorrência (occurrenceAmount) não é automaticamente o valor recorrente futuro (expectedRecurringAmount), salvo confirmação explícita via recurringAmountConfidence no input.",
+      standardRecurringAmount: engineResult.nextIncome.proposedIfScheduleRuleExisted.standardRecurringAmount,
+      standardRecurringAmountConfidence: engineResult.nextIncome.proposedIfScheduleRuleExisted.standardRecurringAmountConfidence,
+      variablePayExpected: engineResult.nextIncome.proposedIfScheduleRuleExisted.variablePayExpected,
+      nextOccurrenceActualAmount: "UNKNOWN",
+      note: "Schedule (dayOfMonth), o valor de UMA ocorrência histórica (occurrenceAmount) e o valor PADRÃO/BASE confirmado (standardRecurringAmount) são evidências SEPARADAS do valor REAL da próxima ocorrência (nextOccurrenceActualAmount), que permanece desconhecido até acontecer — especialmente quando variablePayExpected=true (ex: horas extras).",
       nextIncomeIfProposedRuleExisted: { expectedDate: nextIncomeProposed.expectedDate?.toISOString?.() ?? nextIncomeProposed.expectedDate, status: nextIncomeProposed.status },
     },
     R_externalTransfers: { facts: input.externalTransfers || [], schemaAudit },

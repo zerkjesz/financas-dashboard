@@ -34,6 +34,16 @@
         "date": "2026-01-15",
         "movementConfidence": "CONFIRMED",
         "economicClassification": "UNKNOWN"
+      },
+      {
+        "type": "OUTFLOW",
+        "description": "Exemplo de saída já classificada após confirmação explícita do usuário",
+        "amount": 5.00,
+        "date": "2026-01-15",
+        "movementConfidence": "CONFIRMED",
+        "economicClassification": "EXPENSE",
+        "economicClassificationConfidence": "CONFIRMED",
+        "economicClassificationSource": "explicit user confirmation"
       }
     ],
     "checkpointB": {
@@ -55,7 +65,10 @@
     "dayOfMonth": 1,
     "confidence": "CONFIRMED",
     "scheduleConfidence": "CONFIRMED_BY_MEMORY",
-    "recurringAmountConfidence": null
+    "standardRecurringAmount": null,
+    "standardRecurringAmountConfidence": null,
+    "variablePayExpected": false,
+    "variablePayNote": null
   },
 
   "card": {
@@ -105,6 +118,8 @@
   ],
 
   "externalInstallmentPlans": [],
+
+  "legacyCsvPath": null,
 
   "otherEvidence": []
 }

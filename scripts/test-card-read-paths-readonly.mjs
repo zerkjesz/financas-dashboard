@@ -22,6 +22,7 @@ import path from "node:path";
 import { prisma } from "../lib/prisma.js";
 import { compareMoney, money } from "../lib/money.js";
 import { getCardBillView, listCardBillsView, getOrCreateBill, payBill } from "../lib/cardBillCalculator.js";
+import { getCardCycleForDate } from "../lib/cardCycle.js";
 
 const MARK = "TESTE_FASE413";
 const results = [];
@@ -147,6 +148,15 @@ async function testProjectionWithoutPersistence() {
   });
   created.cards.push(card.id);
 
+  // Fase 5.0.2, item 18 — determinístico independente do dia real em que o
+  // teste roda: em vez de hardcodar "2026-09" como o ciclo atual (que quebra
+  // assim que o relógio real passa do dia 4 do mês e o ciclo "de hoje" vira o
+  // mês seguinte), computa o ciclo atual com a MESMA função pura que
+  // listCardBillsView usa internamente (getCardCycleForDate). A parcela
+  // sempre começa no ciclo atual de verdade, qualquer que seja a data real.
+  const firstCycle = getCardCycleForDate(card, new Date());
+  const lastCycle = addMonthKeyLocal(firstCycle, 5); // 6 parcelas: firstCycle..firstCycle+5
+
   // Compra parcelada em 6x, iniciando no ciclo atual — todas as parcelas caem
   // em ciclos futuros/atual, NENHUM ainda materializado como CardBill.
   const purchase = await prisma.purchase.create({
@@ -156,12 +166,12 @@ async function testProjectionWithoutPersistence() {
       installmentCount: 6,
       installmentValue: money(100),
       cardId: card.id,
-      firstInstallmentMonth: "2026-09",
+      firstInstallmentMonth: firstCycle,
       installments: {
         create: Array.from({ length: 6 }, (_, i) => ({
           number: i + 1,
           amount: money(100),
-          billMonth: addMonthKeyLocal("2026-09", i),
+          billMonth: addMonthKeyLocal(firstCycle, i),
         })),
       },
     },
@@ -172,11 +182,11 @@ async function testProjectionWithoutPersistence() {
   check("antes: zero CardBill persistida pra este cartão (nada foi materializado ainda)", beforeCount === 0, `contagem: ${beforeCount}`);
 
   const view = await listCardBillsView(card.id, { monthsBack: 0, monthsForward: 6 });
-  const septemberBill = view.find((b) => b.cycleMonth === "2026-09");
-  const februaryBill = view.find((b) => b.cycleMonth === "2027-02"); // 2026-09 + 5 = 2027-02, última parcela
+  const firstBill = view.find((b) => b.cycleMonth === firstCycle);
+  const lastBill = view.find((b) => b.cycleMonth === lastCycle);
 
-  check("visão multi-mês mostra a parcela de setembro (100.00), calculada em memória", septemberBill && eq(septemberBill.totalAmount, 100), septemberBill && septemberBill.totalAmount.toString());
-  check("visão multi-mês mostra a parcela de fevereiro/2027 (100.00, última das 6)", februaryBill && eq(februaryBill.totalAmount, 100), februaryBill && februaryBill.totalAmount.toString());
+  check(`visão multi-mês mostra a parcela do ciclo atual (${firstCycle}, 100.00), calculada em memória`, firstBill && eq(firstBill.totalAmount, 100), firstBill && firstBill.totalAmount.toString());
+  check(`visão multi-mês mostra a parcela do último ciclo (${lastCycle}, 100.00, última das 6)`, lastBill && eq(lastBill.totalAmount, 100), lastBill && lastBill.totalAmount.toString());
   check("todas as 7 faturas da janela (0..6 meses) vêm como projeção (id: null)", view.every((b) => b.id === null), JSON.stringify(view.map((b) => ({ cycleMonth: b.cycleMonth, id: b.id }))));
 
   const afterCount = await prisma.cardBill.count({ where: { cardId: card.id } });
