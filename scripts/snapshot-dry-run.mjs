@@ -2156,6 +2156,8 @@ async function main() {
     // não-recarga confirmar má-classificação com evidência suficiente.
     K_restrictedAccountLedgerCandidate: vaRecon,
     L_restrictedAccountReconciliation: {
+      canonicalLedger: vaRecon.canonicalLedger,
+      reclassifiedIncomes: vaRecon.reclassifiedIncomes,
       rawPersistedLedger: vaRecon.rawPersistedLedger,
       hypotheticalReclassifiedLedger: vaRecon.hypotheticalReclassifiedLedger,
       nonRechargeIncomeInvestigation: vaRecon.nonRechargeIncomeInvestigation,
