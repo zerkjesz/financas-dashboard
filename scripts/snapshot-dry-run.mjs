@@ -24,14 +24,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { prisma } from "../lib/prisma.js";
-import { money, addMoney, subtractMoney, sumMoney, compareMoney, isPositive, ZERO } from "../lib/money.js";
+import { money, addMoney, subtractMoney, multiplyMoney, divideMoney, sumMoney, compareMoney, isPositive, isNegative, ZERO } from "../lib/money.js";
 import { computeAccountBalance } from "../lib/accounts.js";
-import { listCardBillsView } from "../lib/cardBillCalculator.js";
+import { getCardBillClosesAt, getCardBillDueDate } from "../lib/cardCycle.js";
 import { classifyCardBill, classifyConfirmedCommitment, classifyContingency, OBLIGATION_CLASS } from "../lib/obligationClassifier.js";
 import { computeFreeMoneyFromBreakdown, computeSafeToSpend, isWithinNextIncomeCommitmentWindow } from "../lib/freeMoney.js";
 import { resolveNextExpectedIncome, resolveNextExpectedIncomeFromDb } from "../lib/incomeHorizon.js";
+import { minProjectedCashBefore } from "../lib/financialProjection.js";
+import { computeFinancialStatus } from "../lib/financialStatus.js";
+import { computeCurrentObligationHorizonEnd } from "../lib/financialEngine.js";
 import { getAppSettings } from "../lib/settings.js";
 import { isValidConfidence } from "../lib/dataConfidence.js";
+
+// Fase 5.0.1 — três estados de completude, usados em toda parte do engine
+// dry-run que depende de evidência parcial. Nunca usar um valor livre fora
+// deste enum (item 10 do pedido).
+export const COMPLETENESS = Object.freeze({ COMPLETE: "COMPLETE", PARTIAL: "PARTIAL", INCOMPLETE: "INCOMPLETE" });
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -237,7 +245,16 @@ function reconcileCheckingLedger(section, { operationalHistoryStart }) {
 }
 
 // ============================================================================
-// K/L/M — ledger da conta restrita: recharge -> observedClosing, mesma disciplina.
+// K/L/M — ledger da conta restrita: recharge -> observedClosing.
+//
+// Fase 5.0.1, item 1 — CORREÇÃO CONCEITUAL: o valor da recarga NUNCA é o
+// "opening balance" (são conceitos diferentes — a recarga é um INFLOW
+// conhecido, não um saldo de abertura). O residual da equação
+// `opening + recharge - knownExpenses = observedClosing` é reportado como
+// INDETERMINATE quando não há evidência independente do saldo imediatamente
+// anterior à recarga — um residual não-zero é tratado como sinal de que o
+// ledger conhecido está INCOMPLETO, nunca como prova de que a conta esteve
+// negativa.
 // ============================================================================
 async function reconcileRestrictedLedger(section) {
   if (!section) return { status: "MISSING_EVIDENCE", reason: "restrictedAccount não informado no input" };
@@ -245,54 +262,321 @@ async function reconcileRestrictedLedger(section) {
   const recharge = money(section.recharge.amount);
   const observedClosing = money(section.observedClosing.amount);
 
-  // Consumo real conhecido no banco (Expense na conta VA, se a conta existir e
-  // tiver slug correspondente) — read-only, só pra tentar explicar a diferença
-  // (item 13), nunca pra ajustar automaticamente.
+  // Consumo real conhecido no banco (Expense na conta restrita, desde a data
+  // da recarga) — read-only, só pra tentar explicar a diferença, nunca pra
+  // ajustar automaticamente.
   let knownConsumption = null;
   let account = null;
+  let reviewCandidates = [];
   if (section.slug) {
     account = await prisma.account.findUnique({ where: { slug: section.slug } });
     if (account) {
       const rechargeDate = d(section.recharge.date);
-      const expenses = await prisma.expense.findMany({
-        where: { accountId: account.id, occurredAt: { gte: rechargeDate } },
-        orderBy: { occurredAt: "asc" },
-      });
+      const [expenses, incomesInAccount] = await Promise.all([
+        prisma.expense.findMany({ where: { accountId: account.id, occurredAt: { gte: rechargeDate } }, orderBy: { occurredAt: "asc" } }),
+        prisma.income.findMany({ where: { accountId: account.id, occurredAt: { gte: rechargeDate } }, orderBy: { occurredAt: "asc" } }),
+      ]);
       knownConsumption = {
         count: expenses.length,
         total: sumMoney(expenses.map((e) => e.amount)).toString(),
-        items: expenses.map((e) => ({ id: e.id, description: e.description, amount: e.amount.toString(), occurredAt: e.occurredAt.toISOString() })),
+        items: expenses.map((e) => ({
+          id: e.id,
+          occurredAt: e.occurredAt.toISOString(),
+          amount: e.amount.toString(),
+          description: e.description,
+          category: e.category,
+          source: e.source,
+          confidence: e.confidence,
+        })),
       };
+
+      // --- Review candidates (item 3) — heurística SÓ pra apontar, nunca pra mutar. ---
+
+      // (a) Toda a atividade conhecida da conta restrita no período está
+      // concentrada num único timestamp de poucos minutos? Sinal de backfill em
+      // lote (o usuário digitou vários dias de gasto de uma vez), não um
+      // registro contínuo — explica por que pode haver gasto real não
+      // logado nos dias sem nenhuma entrada.
+      const allTimestamps = [...expenses, ...incomesInAccount].map((r) => r.occurredAt.getTime()).sort((a, b) => a - b);
+      if (allTimestamps.length > 1) {
+        const spanMinutes = (allTimestamps[allTimestamps.length - 1] - allTimestamps[0]) / 60000;
+        const daysSinceRecharge = (observedClosing && rechargeDate) ? (d(section.observedClosing.date) - rechargeDate) / (24 * 60 * 60 * 1000) : null;
+        if (spanMinutes < 30 && daysSinceRecharge != null && daysSinceRecharge > 3) {
+          reviewCandidates.push({
+            kind: "BATCH_BACKFILL_PATTERN",
+            description: `Todos os ${allTimestamps.length} registros conhecidos da conta desde a recarga foram lançados dentro de uma janela de ~${spanMinutes.toFixed(1)} minutos, cobrindo um período de ~${daysSinceRecharge.toFixed(1)} dias.`,
+            implication: "Padrão típico de lançamento retroativo em lote (o usuário registrou vários dias de uma vez). Dias fora dessa janela podem ter gasto real nunca lançado — plausível explicação para um residual não-zero, não evidência de erro no ledger.",
+          });
+        }
+      }
+
+      // (b) Income não-recarga creditado na conta restrita (ex: um P2P que
+      // "sobrou" na conta errada) — economicamente atípico pra uma conta
+      // food-voucher, vale reportar como candidato de revisão.
+      const rechargeAmountStr = recharge.toString();
+      for (const inc of incomesInAccount) {
+        if (compareMoney(money(inc.amount), recharge) !== 0) {
+          reviewCandidates.push({
+            kind: "UNEXPECTED_INCOME_IN_RESTRICTED_ACCOUNT",
+            description: `Income de ${inc.amount.toString()} ("${inc.description}") creditado na conta restrita em ${inc.occurredAt.toISOString()}, valor diferente da recarga (${rechargeAmountStr}).`,
+            implication: "Verificar se esse crédito é uma recarga extra legítima ou um lançamento que deveria ter ido para outra conta.",
+          });
+        }
+      }
+
+      // (c) A própria recarga: o Income persistido bate em DATA com o que o
+      // input declarou? (achado real: pode ter sido lançada com occurredAt de
+      // um dia de backfill, não do dia real da recarga.)
+      const persistedRecharge = incomesInAccount.find((i) => compareMoney(money(i.amount), recharge) === 0);
+      if (persistedRecharge) {
+        const persistedDate = persistedRecharge.occurredAt.toISOString().slice(0, 10);
+        if (persistedDate !== section.recharge.date) {
+          reviewCandidates.push({
+            kind: "RECHARGE_DATE_MISMATCH",
+            description: `Income de ${rechargeAmountStr} persistido no banco tem occurredAt=${persistedDate}, diferente da data declarada no input (${section.recharge.date}).`,
+            implication: "occurredAt provavelmente reflete a data do LANÇAMENTO (backfill via bot), não a data real do evento — não afeta o valor, mas explica por que filtros por data podem excluir/incluir a linha errada.",
+          });
+        }
+      } else {
+        reviewCandidates.push({
+          kind: "RECHARGE_NOT_FOUND_AS_INCOME",
+          description: `Nenhum Income de valor ${rechargeAmountStr} encontrado na conta restrita — a recarga declarada no input não tem um registro correspondente óbvio no banco.`,
+          implication: "Pode ser que a recarga nunca tenha sido lançada, ou tenha sido lançada com valor/conta diferentes — precisa revisão manual.",
+        });
+      }
+
+      // (d) Expense com descrição de conta restrita (palavras-chave) lançado
+      // em OUTRA conta — cruza against TODAS as contas, não só a restrita.
+      const misclassifiedCandidates = await prisma.expense.findMany({
+        where: { accountId: { not: account.id }, description: { contains: section.restrictedKeyword || "vale aliment", mode: "insensitive" } },
+      });
+      for (const e of misclassifiedCandidates) {
+        reviewCandidates.push({
+          kind: "POSSIBLE_MISCLASSIFIED_EXPENSE",
+          description: `Expense ${e.id} ("${e.description.slice(0, 80)}") menciona a conta restrita mas está lançado em outra Account (accountId=${e.accountId}).`,
+          implication: "Se for de fato um gasto da conta restrita lançado na conta errada, isso NÃO afeta o residual desta reconciliação (o gasto já está contado em algum lugar), mas indica erro de classificação a corrigir separadamente.",
+        });
+      }
     }
   }
 
-  const knownConsumptionTotal = knownConsumption ? money(knownConsumption.total) : null;
-  const mathematicalExpected = knownConsumptionTotal != null ? subtractMoney(recharge, knownConsumptionTotal) : null;
-  const unexplainedDifferenceVA = mathematicalExpected != null ? subtractMoney(observedClosing, mathematicalExpected) : null;
+  const knownNetMovements = knownConsumption != null ? subtractMoney(recharge, money(knownConsumption.total)) : null;
+  const residualOpeningFromKnownLedger = knownNetMovements != null ? subtractMoney(observedClosing, knownNetMovements) : null;
+  const unexplainedMagnitude = residualOpeningFromKnownLedger != null ? residualOpeningFromKnownLedger.abs() : null;
 
   return {
     account: account ? { id: account.id, slug: account.slug } : { status: "NOT_FOUND_IN_DB", slugSearched: section.slug ?? null },
     recharge: { amount: recharge.toString(), date: section.recharge.date, confidence: section.recharge.confidence },
     observedClosing: { amount: observedClosing.toString(), date: section.observedClosing.date, confidence: section.observedClosing.confidence },
     knownConsumptionFoundInDb: knownConsumption,
-    mathematicalExpected: mathematicalExpected?.toString() ?? null,
-    unexplainedDifferenceVA: unexplainedDifferenceVA?.toString() ?? null,
-    derivedOpeningBalanceVA: {
-      value: recharge.toString(),
-      basis: "recharge (única âncora informada no cutoff vaHistoryStart)",
-      openingBalanceEvidence: section.recharge.confidence === "CONFIRMED" ? "EVIDENCED" : "DERIVED_ONLY",
-    },
+    // Item 1 — nomenclatura corrigida: NUNCA "derivedOpeningBalance = recharge".
+    knownNetMovements: knownNetMovements?.toString() ?? null,
+    residualOpeningFromKnownLedger: residualOpeningFromKnownLedger?.toString() ?? null,
+    derivedOpeningBalance: "INDETERMINATE",
+    unexplainedOutflowsOrMissingEvidence: unexplainedMagnitude?.toString() ?? null,
+    openingBalanceEvidence: "MISSING",
+    // Mantido só por compatibilidade de leitura do relatório anterior — mesmo
+    // valor de residualOpeningFromKnownLedger, nome antigo não deve ser usado.
+    unexplainedDifferenceVA: residualOpeningFromKnownLedger?.toString() ?? null,
+    reviewCandidates,
     investigationNote:
-      unexplainedDifferenceVA != null && !unexplainedDifferenceVA.isZero()
-        ? "Diferença não fechada só pelas Expense encontradas na conta VA no banco dev — candidatos a investigar: " +
-          "gasto lançado na conta errada (irrestrita em vez de restrita), CSV legado não importado, data fora do cutoff, arredondamento, lançamento omitido. " +
-          "NÃO convertida em ajuste automaticamente."
+      residualOpeningFromKnownLedger != null && !residualOpeningFromKnownLedger.isZero()
+        ? "Ledger conhecido está INCOMPLETO — o residual NÃO deve ser interpretado como a conta tendo ficado negativa, e sim como evidência de gasto/movimento real ainda não lançado no banco dev (ou lançado fora da janela consultada). " +
+          "NÃO convertido em ajuste automaticamente. Ver reviewCandidates para achados concretos desta investigação."
         : "N/A — sem base de comparação suficiente (nenhuma Expense encontrada na conta) ou diferença zero.",
+    externalSourceInvestigation: {
+      searchedRepositoryForCsv: true,
+      csvFoundInRepository: false,
+      // Item 4 — distinção explícita exigida: a AUSÊNCIA de um CSV no
+      // repositório não é prova de que a evidência não existe em lugar nenhum
+      // (extrato do app do vale-refeição, e-mail, notificação no celular do
+      // usuário — fora do alcance desta ferramenta e deste repositório).
+      classification: "MISSING_EXTERNAL_SOURCE_FILE",
+      note:
+        "NOT_IN_REPOSITORY != EVIDENCE_DOES_NOT_EXIST. Nenhum arquivo .csv foi encontrado no repositório local, mas isso não fecha o caso — " +
+        "um extrato do provedor do vale-refeição (app/e-mail/notificação) pode existir fora do alcance desta ferramenta e precisa ser " +
+        "disponibilizado antes de considerar a reconciliação da conta restrita definitivamente concluída.",
+    },
   };
 }
 
 // ============================================================================
-// N/O — Card reconciliation + persisted vs projected CardBills (itens 17-19)
+// Confirma no schema (read-only, lê o arquivo .prisma) a constraint real de
+// unicidade de CardBill — item 6 do pedido. Nunca assume; sempre relê o
+// arquivo, então uma mudança de schema futura quebra esta checagem em vez de
+// silenciosamente mentir sobre a constraint.
+// ============================================================================
+function confirmCardBillUniqueConstraint() {
+  const schemaPath = path.join(HERE, "..", "prisma", "schema.prisma");
+  const schemaText = fs.readFileSync(schemaPath, "utf8");
+  const modelMatch = schemaText.match(/model CardBill \{[\s\S]*?\n\}/);
+  const modelText = modelMatch ? modelMatch[0] : "";
+  const uniqueMatch = modelText.match(/@@unique\(\[([^\]]+)\]\)/);
+  const fields = uniqueMatch ? uniqueMatch[1].split(",").map((s) => s.trim()) : [];
+  return {
+    confirmed: fields.length > 0,
+    fields,
+    isCardIdCycleMonth: fields.length === 2 && fields.includes("cardId") && fields.includes("cycleMonth"),
+    implication:
+      fields.includes("cardId") && fields.includes("cycleMonth")
+        ? "No máximo UMA CardBill por (cardId, cycleMonth). Uma correção pra um ciclo que já tem row persistida é NECESSARIAMENTE um UPDATE — propor CREATE ali colidiria com a constraint e falharia (ou seria um bug de modelagem se contornado)."
+        : "Constraint não encontrada como esperado — revisar manualmente antes de propor qualquer mutação de CardBill.",
+  };
+}
+
+// ============================================================================
+// Auditoria read-only da(s) Purchase existente(s) contra os valores de fatura
+// conhecidos (item 5 do pedido). Genérica: cruza QUALQUER Purchase do cartão
+// informado contra QUALQUER known bill do input — não assume nada sobre
+// descrição/nome específico.
+// ============================================================================
+async function auditPurchasesAgainstKnownBills(cardInput, knownBillsByMonth) {
+  if (!cardInput?.slug) return { status: "MISSING_EVIDENCE", reason: "card.slug não informado — não é possível localizar Purchase" };
+
+  const card = await prisma.card.findUnique({ where: { slug: cardInput.slug } });
+  if (!card) return { status: "NOT_FOUND_IN_DB", slugSearched: cardInput.slug };
+
+  const purchases = await prisma.purchase.findMany({
+    where: { cardId: card.id },
+    include: { installments: { orderBy: { number: "asc" } } },
+    orderBy: { purchasedAt: "asc" },
+  });
+
+  const purchaseAudits = purchases.map((p) => {
+    const installmentsByMonth = new Map(p.installments.map((i) => [i.billMonth, i]));
+    const monthsOccupied = p.installments.map((i) => i.billMonth);
+
+    // B) Explica o(s) componente(s) recorrente(s) dos known bills? Cruza CADA
+    // parcela contra o valor conhecido do mesmo cycleMonth, se houver.
+    const explainsComponent = [];
+    for (const inst of p.installments) {
+      const known = knownBillsByMonth.get(inst.billMonth);
+      if (known == null) continue;
+      const instAmount = money(inst.amount);
+      explainsComponent.push({
+        billMonth: inst.billMonth,
+        installmentAmount: instAmount.toString(),
+        knownBillTotal: known.toString(),
+        exactMatch: compareMoney(instAmount, known) === 0,
+        explainsPartial: compareMoney(instAmount, known) < 0,
+        remainderUnexplainedByThisPurchase: subtractMoney(known, instAmount).toString(),
+      });
+    }
+
+    // C/D/E — evidência de dado real vs teste, sem decidir por conta própria:
+    // reporta os sinais encontrados, deixa a classificação como UNKNOWN salvo
+    // sinal forte o suficiente.
+    const evidenceForReal = [];
+    const evidenceForTest = [];
+    if (p.source === "manual" || p.source === "telegram") evidenceForReal.push(`source="${p.source}" (não é um marcador de teste conhecido do projeto)`);
+    if (!/teste|test|fixture|sample/i.test(p.description)) evidenceForReal.push("descrição não contém nenhum marcador de teste conhecido (ex: TESTE_, [TESTE], test, fixture)");
+    const exactMatches = explainsComponent.filter((e) => e.exactMatch);
+    if (exactMatches.length > 0) evidenceForReal.push(`bate EXATAMENTE com ${exactMatches.length} known bill(s): ${exactMatches.map((e) => e.billMonth).join(", ")}`);
+    const partialMatches = explainsComponent.filter((e) => e.explainsPartial);
+    if (partialMatches.length > 0) evidenceForTest.push(`NÃO explica sozinha ${partialMatches.length} known bill(s) maior(es) que a parcela: ${partialMatches.map((e) => e.billMonth).join(", ")} — precisaria de outras compras reais não capturadas`);
+    const knownMonthsNotCovered = [...knownBillsByMonth.keys()].filter((m) => !monthsOccupied.includes(m) && money(knownBillsByMonth.get(m)).gt(0));
+    if (knownMonthsNotCovered.length > 0) evidenceForTest.push(`não cobre known bill(s) fora da sua janela de parcelas: ${knownMonthsNotCovered.join(", ")}`);
+
+    let conclusion = "UNKNOWN";
+    if (evidenceForReal.length > 0 && evidenceForTest.length === 0) conclusion = "LIKELY_REAL";
+    else if (evidenceForReal.length > 0 && evidenceForTest.length > 0) conclusion = "UNKNOWN_PARTIAL_EXPLANATORY_POWER";
+
+    return {
+      purchase: {
+        id: p.id,
+        description: p.description,
+        purchasedAt: p.purchasedAt.toISOString(),
+        createdAt: p.createdAt.toISOString(),
+        totalAmount: p.totalAmount.toString(),
+        installmentValue: p.installmentValue.toString(),
+        installmentCount: p.installmentCount,
+        cardId: p.cardId,
+        source: p.source,
+        confidence: p.confidence,
+      },
+      installments: p.installments.map((i) => ({ number: i.number, amount: i.amount.toString(), billMonth: i.billMonth, createdAt: i.createdAt.toISOString() })),
+      answerA_monthsOccupied: monthsOccupied,
+      answerB_explainsRecurringComponent: explainsComponent,
+      answerC_evidenceForReal: evidenceForReal,
+      answerD_evidenceForTestOrJunk: evidenceForTest,
+      answerE_conclusion: conclusion,
+      conclusionNote: "NÃO marcada como legacy/test sem evidência suficiente — ver evidenceForReal/evidenceForTestOrJunk acima.",
+    };
+  });
+
+  return { status: purchases.length > 0 ? "FOUND" : "NONE_FOUND", purchases: purchaseAudits };
+}
+
+// ============================================================================
+// Classifica CADA CardBill persistida contra a realidade conhecida (item 6/7
+// do pedido). Usa: (a) cruzamento de valor com known bills; (b) clustering de
+// createdAt (lote de materialização = mesmo segundo/minuto de criação, sinal
+// forte de efeito colateral do bug antigo — Fase 4.1.2/4.1.3); (c) se
+// remaining > 0, a row PODE contaminar incurredLiabilities/futureObligations
+// se deixada como está — nunca assume que "legacy" é seguro sem checar isso.
+// ============================================================================
+function classifyPersistedCardBills(persistedBills, knownBillsByMonth) {
+  if (persistedBills.length === 0) return [];
+
+  // Clustering: agrupa por minuto de createdAt — um lote de materialização
+  // (Fase 4.1.2, item 6) cria várias rows em segundos umas das outras.
+  const createdBuckets = new Map();
+  for (const b of persistedBills) {
+    const bucketKey = b.createdAt.slice(0, 16); // "YYYY-MM-DDTHH:MM"
+    createdBuckets.set(bucketKey, (createdBuckets.get(bucketKey) || 0) + 1);
+  }
+
+  return persistedBills.map((b) => {
+    const known = knownBillsByMonth.get(b.cycleMonth);
+    const remaining = money(b.remainingAmount);
+    const totalAmount = money(b.totalAmount);
+    const isZero = totalAmount.isZero();
+    const inBatch = createdBuckets.get(b.createdAt.slice(0, 16)) >= 4; // 4+ rows no mesmo minuto = lote
+
+    let classification;
+    let reasoning;
+    if (known != null && compareMoney(totalAmount, known) === 0) {
+      classification = "KEEP_OR_PARTIAL_MATCH";
+      reasoning = "totalAmount já bate com o valor real conhecido — mas closesAt/dueAt podem mudar se o Card.closingDay real for diferente do usado quando esta row foi criada; verificar paidAmount/status antes de considerar 100% correta.";
+    } else if (known != null) {
+      classification = "CANONICAL_UPDATE_CANDIDATE";
+      reasoning = `totalAmount persistido (${b.totalAmount}) diverge do valor real conhecido (${known.toString()}) — precisa de UPDATE, nunca CREATE (constraint cardId+cycleMonth já garante que só existe esta row pra este ciclo).`;
+    } else if (isZero && inBatch) {
+      classification = "CLEAR_ARTIFACT_CANDIDATE";
+      reasoning = "totalAmount=0, criada no mesmo lote (mesmo minuto) que outras rows zeradas, fora da janela de ciclos conhecidos — padrão exato do bug de materialização antigo (Fase 4.1.2/4.1.3), sem nenhum pagamento/transfer vinculado.";
+    } else {
+      classification = "UNKNOWN";
+      reasoning = "Nem bate com um valor conhecido, nem se encaixa no padrão claro de artefato zerado em lote — precisa de investigação adicional antes de decidir a mutação.";
+    }
+
+    // Contaminação: qualquer row com remaining > 0 participa da classificação
+    // de obrigações (incurred/future) do engine REAL hoje — mesmo que
+    // "legacy"/incorreta. Rows com remaining == 0 são sempre SETTLED e
+    // ignoradas pelo classificador (lib/obligationClassifier.js), então são
+    // inofensivas ao cálculo (mas ainda poluem a UI de /cartoes).
+    const wouldContaminateEngineIfLeftAsIs = isPositive(remaining) && classification !== "KEEP_OR_PARTIAL_MATCH";
+
+    return {
+      id: b.id,
+      cycleMonth: b.cycleMonth,
+      totalAmount: b.totalAmount,
+      paidAmount: b.paidAmount,
+      remainingAmount: b.remainingAmount,
+      status: b.status,
+      closesAt: b.closesAt,
+      dueAt: b.dueAt,
+      createdAt: b.createdAt,
+      updatedAt: b.updatedAt,
+      knownRealAmount: known?.toString() ?? null,
+      classification,
+      reasoning,
+      wouldContaminateEngineIfLeftAsIs,
+    };
+  });
+}
+
+// ============================================================================
+// N/O — Card reconciliation + persisted vs known CardBills (itens 6-8, 17-19)
 // ============================================================================
 async function reconcileCard(cardInput) {
   if (!cardInput) return { status: "MISSING_EVIDENCE", reason: "card não informado no input" };
@@ -302,6 +586,7 @@ async function reconcileCard(cardInput) {
   const usedLimitObserved = subtractMoney(totalLimit, observedAvailable);
 
   const knownBills = (cardInput.bills || []).map((b) => ({ ...b, amountMoney: money(b.amount) }));
+  const knownBillsByMonth = new Map(knownBills.map((b) => [b.cycleMonth, b.amountMoney]));
   const unpaidSum = sumMoney(knownBills.filter((b) => b.status !== "PAID").map((b) => b.amountMoney));
   const usedLimitChecksum = {
     formula: `${totalLimit.toString()} - ${observedAvailable.toString()} = ${usedLimitObserved.toString()}`,
@@ -321,7 +606,7 @@ async function reconcileCard(cardInput) {
 
   let card = null;
   let persistedBills = [];
-  let projectedVsKnown = [];
+  let classifiedBills = [];
   if (cardInput.slug) {
     card = await prisma.card.findUnique({ where: { slug: cardInput.slug } });
     if (card) {
@@ -337,24 +622,32 @@ async function reconcileCard(cardInput) {
         createdAt: b.createdAt.toISOString(),
         updatedAt: b.updatedAt.toISOString(),
       }));
-
-      // Cruza cada CardBill persistida contra o valor CONHECIDO real (input) pro
-      // mesmo cycleMonth, se houver — flag explícito quando o valor persistido
-      // não bate com a realidade conhecida (evidência de materialização
-      // artificial do comportamento antigo, Fase 4.1.2 item 6/Fase 4.1.3).
-      const knownByMonth = new Map(knownBills.map((b) => [b.cycleMonth, b.amountMoney]));
-      projectedVsKnown = persistedBills.map((pb) => {
-        const known = knownByMonth.get(pb.cycleMonth);
-        return {
-          cycleMonth: pb.cycleMonth,
-          persistedTotalAmount: pb.totalAmount,
-          knownRealAmount: known?.toString() ?? null,
-          matchesKnownReality: known != null ? compareMoney(money(pb.totalAmount), known) === 0 : null,
-          looksLikeMaterializationArtifact: known != null ? compareMoney(money(pb.totalAmount), known) !== 0 : known === undefined && money(pb.totalAmount).isZero(),
-        };
-      });
+      classifiedBills = classifyPersistedCardBills(persistedBills, knownBillsByMonth);
     }
   }
+
+  const purchaseAudit = await auditPurchasesAgainstKnownBills(cardInput, knownBillsByMonth);
+
+  // Item 8 — OBSERVED BILL TOTAL vs UNDERLYING PURCHASES EXPLAINED, por ciclo.
+  const explainedByMonth = new Map();
+  if (purchaseAudit.status === "FOUND") {
+    for (const pa of purchaseAudit.purchases) {
+      for (const comp of pa.answerB_explainsRecurringComponent) {
+        const prev = explainedByMonth.get(comp.billMonth) || ZERO;
+        explainedByMonth.set(comp.billMonth, addMoney(prev, money(comp.installmentAmount)));
+      }
+    }
+  }
+  const observedVsExplained = knownBills.map((b) => {
+    const explained = explainedByMonth.get(b.cycleMonth) || ZERO;
+    return {
+      cycleMonth: b.cycleMonth,
+      observedBillTotal: b.amountMoney.toString(),
+      underlyingPurchasesExplained: explained.toString(),
+      unexplainedByKnownPurchases: subtractMoney(b.amountMoney, explained).toString(),
+      fullyExplained: compareMoney(explained, b.amountMoney) === 0,
+    };
+  });
 
   return {
     totalLimit: totalLimit.toString(),
@@ -363,14 +656,17 @@ async function reconcileCard(cardInput) {
     closingDay: cardInput.closingDay,
     dueDay: cardInput.dueDay,
     knownBills: knownBills.map((b) => ({ cycleMonth: b.cycleMonth, amount: b.amountMoney.toString(), status: b.status })),
+    observedVsUnderlyingPurchasesExplained: observedVsExplained,
     liabilityClassification: {
       rule: "Fase 4.1.2 — primeira bill não liquidada (cronológica) = INCURRED_LIABILITY, demais = FUTURE_OBLIGATION",
       incurredLiability: incurred ? { cycleMonth: incurred.cycleMonth, amount: incurred.amountMoney.toString() } : null,
       futureObligations: { total: futureSum.toString(), items: future.map((b) => ({ cycleMonth: b.cycleMonth, amount: b.amountMoney.toString() })) },
     },
     cardFoundInDb: card ? { id: card.id, slug: card.slug } : { status: "NOT_FOUND_IN_DB", slugSearched: cardInput.slug ?? null },
+    cardBillUniqueConstraint: confirmCardBillUniqueConstraint(),
     persistedCardBillsInDb: persistedBills,
-    persistedVsKnownReality: projectedVsKnown,
+    persistedCardBillsClassified: classifiedBills,
+    purchaseAudit,
     currentCardCreditBalanceAssumption: "R$0,00 — nenhuma evidência de saldo credor atual informada neste snapshot.",
   };
 }
@@ -415,13 +711,22 @@ function auditTransferSchemaForExternalScope() {
 }
 
 // ============================================================================
-// W — Financial Engine dry-run (item 24) — 100% em memória, sobre o ESTADO
-// CANÔNICO PROPOSTO (não sobre o banco, que sabemos desatualizado — item 8).
-// Reusa as funções PURAS de lib/obligationClassifier.js e lib/freeMoney.js —
-// nenhuma chamada a prisma nesta função.
+// W — Financial Engine dry-run (item 24, corrigido pelo item 9 da Fase 5.0.1)
+// — 100% em memória, sobre o ESTADO CANÔNICO PROPOSTO (input), NUNCA sobre a
+// ausência de rows V2 no banco (isso mediria "o que já foi persistido", não
+// "o que o snapshot proposto diz"). Reusa as funções PURAS de
+// lib/obligationClassifier.js, lib/freeMoney.js, lib/financialProjection.js
+// (minProjectedCashBefore), lib/financialStatus.js e lib/financialEngine.js
+// (computeCurrentObligationHorizonEnd) — nenhuma chamada a prisma aqui.
 // ============================================================================
-function engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings }) {
+function addDaysUtc(date, days) {
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+function engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings, asOf }) {
   const missing = [];
+  const HORIZON_DAYS = 90;
+  const horizonEnd = addDaysUtc(asOf, HORIZON_DAYS);
 
   // --- balances ---
   const unrestrictedCash = input.checkingAccount ? money(input.checkingAccount.checkpointB.amount) : null;
@@ -435,53 +740,78 @@ function engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings
   const restrictedBalance = input.restrictedAccount ? money(input.restrictedAccount.observedClosing.amount) : null;
   const totalBalances = unrestrictedCash != null && restrictedBalance != null ? addMoney(unrestrictedCash, restrictedBalance) : null;
 
-  // --- obligations: CardBill (proposto, valores conhecidos reais) ---
-  const cardBillsProposed = (input.card?.bills || []).sort((a, b) => a.cycleMonth.localeCompare(b.cycleMonth));
-  const unsettledSorted = cardBillsProposed.filter((b) => b.status !== "PAID").sort((a, b) => a.cycleMonth.localeCompare(b.cycleMonth));
+  // --- obligations: CardBill (proposto, valores conhecidos reais + dueAt/closesAt
+  // REAIS via lib/cardCycle.js, quando closingDay/dueDay do cartão são conhecidos) ---
+  const cardConfig = input.card ? { closingDay: input.card.closingDay ?? null, dueDay: input.card.dueDay } : null;
+  const cardBillsProposed = (input.card?.bills || [])
+    .map((b) => ({
+      ...b,
+      dueAt: cardConfig ? getCardBillDueDate(cardConfig, b.cycleMonth) : null,
+      closesAt: cardConfig ? getCardBillClosesAt(cardConfig, b.cycleMonth) : null,
+    }))
+    .sort((a, b) => a.cycleMonth.localeCompare(b.cycleMonth));
+  const unsettledSorted = [...cardBillsProposed].filter((b) => b.status !== "PAID").sort((a, b) => a.cycleMonth.localeCompare(b.cycleMonth));
   const currentRelevantCycleMonth = unsettledSorted[0]?.cycleMonth ?? null;
 
   let incurredLiabilities = ZERO;
   let futureObligationsFromCard = ZERO;
   const incurredItems = [];
   const futureItems = [];
+  const timelineEvents = []; // { date, amount (negativo=saída), label, kind }
   for (const bill of cardBillsProposed) {
     const asFakeBill = { totalAmount: money(bill.amount), paidAmount: bill.status === "PAID" ? money(bill.amount) : money(0), cycleMonth: bill.cycleMonth };
     const cls = classifyCardBill(asFakeBill, { isCurrentRelevant: bill.cycleMonth === currentRelevantCycleMonth });
     const remaining = subtractMoney(asFakeBill.totalAmount, asFakeBill.paidAmount);
+    const item = { cycleMonth: bill.cycleMonth, amount: remaining.toString(), dueAt: bill.dueAt?.toISOString() ?? null };
     if (cls === OBLIGATION_CLASS.INCURRED_LIABILITY) {
       incurredLiabilities = addMoney(incurredLiabilities, remaining);
-      incurredItems.push({ cycleMonth: bill.cycleMonth, amount: remaining.toString() });
+      incurredItems.push(item);
     } else if (cls === OBLIGATION_CLASS.FUTURE_OBLIGATION) {
       futureObligationsFromCard = addMoney(futureObligationsFromCard, remaining);
-      futureItems.push({ cycleMonth: bill.cycleMonth, amount: remaining.toString() });
+      futureItems.push(item);
+    }
+    if (isPositive(remaining) && bill.dueAt && bill.dueAt >= asOf && bill.dueAt <= horizonEnd) {
+      timelineEvents.push({ date: bill.dueAt, amount: remaining.negated(), label: `Fatura cartão (${bill.cycleMonth})`, kind: "card_bill" });
     }
   }
 
   // --- obligations: ConfirmedCommitment (proposto, genérico — vem do input) ---
+  // Item 12 — a dueDate real pode ser incerta entre N candidatas: a
+  // CLASSIFICAÇÃO (current horizon vs future) só é aceita se for A MESMA sob
+  // TODAS as candidatas (nunca finge saber qual é a certa). Pra posicionar o
+  // evento na timeline física (checkpoints day30/60/90), usa a candidata MAIS
+  // CEDO como placeholder conservador (dinheiro sai o quanto antes na pior
+  // hipótese) — nunca apresentado como "a data real", sempre com
+  // dueDateUncertain=true quando há mais de uma candidata.
   let currentHorizonObligations = ZERO;
   const currentHorizonItems = [];
   const unfundedConfirmedCommitments = { count: 0, amount: ZERO, items: [] };
   for (const c of input.confirmedCommitments || []) {
-    const candidates = c.dateCandidates || [];
+    const candidates = (c.dateCandidates || []).map((s) => d(s)).sort((a, b) => a - b);
     if (candidates.length === 0) {
       missing.push({ field: `confirmedCommitment(${c.description}).dueDate`, impact: "não é possível classificar horizonte sem nenhuma data candidata", evidenceNeeded: "data confirmada do compromisso" });
       continue;
     }
-    // Classifica sob CADA data candidata — só inclui no cálculo se o resultado
-    // for O MESMO independente de qual candidata for a real (item 24.4: "só
-    // calcule isso se a data/horizonte puder ser determinada com segurança").
-    const classifications = candidates.map((dateStr) => classifyConfirmedCommitment(
-      { status: "CONFIRMED", dueDate: d(dateStr) },
-      { nextIncomeDate: nextIncomeProposed.expectedDate }
-    ));
+    const classifications = candidates.map((date) => classifyConfirmedCommitment({ status: "CONFIRMED", dueDate: date }, { nextIncomeDate: nextIncomeProposed.expectedDate }));
     const allSame = classifications.every((cls) => cls === classifications[0]);
     if (!allSame) {
-      missing.push({ field: `confirmedCommitment(${c.description}).dueDate`, impact: "classificação de horizonte MUDA dependendo de qual candidata for a data real — não seguro decidir", evidenceNeeded: `data exata entre ${candidates.join(" ou ")}` });
+      missing.push({ field: `confirmedCommitment(${c.description}).dueDate`, impact: "classificação de horizonte MUDA dependendo de qual candidata for a data real — não seguro decidir", evidenceNeeded: `data exata entre ${(c.dateCandidates || []).join(" ou ")}` });
       continue;
     }
     const cls = classifications[0];
     const amount = money(c.amount);
-    const item = { type: "ConfirmedCommitment", description: c.description, amount: amount.toString(), dateCandidates: candidates, dateConfidence: c.dateConfidence, funding: c.funding, status: "CONFIRMED" };
+    const timelineDatePlaceholder = candidates[0];
+    const item = {
+      type: "ConfirmedCommitment",
+      description: c.description,
+      amount: amount.toString(),
+      dueDateUncertain: candidates.length > 1,
+      dueDateCandidates: (c.dateCandidates || []),
+      timelineDatePlaceholderNote: candidates.length > 1 ? "Data real ainda UNCERTAIN_DATE_RANGE — usada a candidata mais cedo só como placeholder conservador na timeline física, nunca afirmada como a data real." : null,
+      dateConfidence: c.dateConfidence,
+      funding: c.funding,
+      status: "CONFIRMED",
+    };
     if (cls === OBLIGATION_CLASS.CURRENT_HORIZON_OBLIGATION) {
       currentHorizonObligations = addMoney(currentHorizonObligations, amount);
       currentHorizonItems.push(item);
@@ -493,20 +823,68 @@ function engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings
     } else {
       futureItems.push(item);
     }
+    if (timelineDatePlaceholder >= asOf && timelineDatePlaceholder <= horizonEnd) {
+      timelineEvents.push({ date: timelineDatePlaceholder, amount: amount.negated(), label: `${c.description} (data placeholder, ${item.dueDateUncertain ? "incerta" : "confirmada"})`, kind: "confirmed_commitment" });
+    }
   }
 
-  // --- contingencyExposure (proposto, genérico) — nunca entra em freeMoney ---
+  // --- contingencyExposure (proposto, genérico) — nunca entra em freeMoney,
+  // nunca inserida na timeline com data inventada (item 11). ---
   const contingencies = input.contingencies || [];
   const contingencyExpected = sumMoney(contingencies.filter((c) => c.expectedAmount != null).map((c) => money(c.expectedAmount)));
   const contingencyMax = sumMoney(contingencies.map((c) => money(c.maxAmount)));
-  const contingencyItems = contingencies.map((c) => ({
-    description: c.description,
-    expectedAmount: c.expectedAmount != null ? money(c.expectedAmount).toString() : null,
-    expectedAmountConfidence: c.expectedAmountConfidence,
-    maxAmount: money(c.maxAmount).toString(),
-    maxAmountConfidence: c.maxAmountConfidence,
-    classification: classifyContingency({ status: c.status }),
-  }));
+  const undatedRiskExposures = [];
+  const contingencyItems = contingencies.map((c) => {
+    if (!c.expectedDate) {
+      undatedRiskExposures.push({
+        description: c.description,
+        expectedAmount: c.expectedAmount != null ? money(c.expectedAmount).toString() : null,
+        maxAmount: money(c.maxAmount).toString(),
+        classification: "UNDATED_RISK_EXPOSURE",
+        note: "Sem expectedDate confiável — exposição preservada em contingencyExposure.expected/maximum, NUNCA inserida num dia fictício da timeline.",
+      });
+    }
+    return {
+      description: c.description,
+      expectedAmount: c.expectedAmount != null ? money(c.expectedAmount).toString() : null,
+      expectedAmountConfidence: c.expectedAmountConfidence,
+      maxAmount: money(c.maxAmount).toString(),
+      maxAmountConfidence: c.maxAmountConfidence,
+      classification: classifyContingency({ status: c.status }),
+      dated: c.expectedDate != null,
+    };
+  });
+
+  // --- recurring income: SCHEDULE evidence separada de AMOUNT evidence (item 16) ---
+  // dayOfMonth vem do input (schedule) — CONFIRMED_BY_MEMORY por padrão (só 1
+  // ocorrência histórica sustenta a cadência). O VALOR recorrente futuro só é
+  // usado se input.mainIncome.recurringAmountConfidence vier explicitamente
+  // preenchido — na ausência disso, o valor recorrente é UNKNOWN e NENHUM
+  // denominador é inventado pra committedPercent.
+  const scheduleConfidence = input.mainIncome?.scheduleConfidence ?? (input.mainIncome ? "CONFIRMED_BY_MEMORY" : null);
+  const recurringAmountConfidence = input.mainIncome?.recurringAmountConfidence ?? null;
+  const expectedRecurringAmount = recurringAmountConfidence != null ? money(input.mainIncome.amount) : null;
+  if (input.mainIncome && expectedRecurringAmount == null) {
+    missing.push({
+      field: "mainIncome.recurringAmountConfidence",
+      impact: "schedule (dia do mês) é conhecido, mas o VALOR de ocorrências futuras não está confirmado — nextIncomeCommitment.committedPercent e os checkpoints de projeção após a próxima renda ficam PARTIAL",
+      evidenceNeeded: "confirmação explícita de que o valor recorrente futuro é o mesmo da última ocorrência observada",
+    });
+  }
+
+  // Ocorrências de renda dentro do horizonte (só schedule, nunca valor
+  // inventado) — usadas só pra apontar QUANDO a projeção cruza um evento de
+  // valor desconhecido, nunca inseridas na timeline com um valor chutado.
+  const incomeScheduleEvents = [];
+  if (nextIncomeProposed.expectedDate) {
+    let occ = nextIncomeProposed.expectedDate;
+    while (occ <= horizonEnd) {
+      incomeScheduleEvents.push({ date: occ.toISOString(), amountKnown: expectedRecurringAmount != null });
+      if (expectedRecurringAmount != null) timelineEvents.push({ date: occ, amount: expectedRecurringAmount, label: "Renda principal (recorrência proposta)", kind: "recurring_income" });
+      occ = new Date(Date.UTC(occ.getUTCFullYear(), occ.getUTCMonth() + 1, occ.getUTCDate()));
+    }
+  }
+  const projectionCrossesUnknownIncomeAmount = incomeScheduleEvents.some((e) => !e.amountKnown);
 
   const canComputeFreeMoney = unrestrictedCash != null;
   const freeMoney = canComputeFreeMoney
@@ -516,17 +894,110 @@ function engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings
 
   const safeToSpend = freeMoney != null ? computeSafeToSpend(freeMoney, appSettings.safetyMarginPercent) : null;
 
+  // --- baseline timeline física (item 9) — só eventos DATADOS entram; ---
+  const sortedTimeline = [...timelineEvents].sort((a, b) => a.date.getTime() - b.date.getTime());
+  let running = unrestrictedCash;
+  const timelineWithBalances = sortedTimeline.map((e) => {
+    running = running != null ? addMoney(running, e.amount) : null;
+    return { ...e, dateIso: e.date.toISOString(), balanceAfter: running?.toString() ?? null };
+  });
+  const baseProjectionLite = unrestrictedCash != null ? { startingCash: unrestrictedCash, timeline: sortedTimeline.map((e) => ({ date: e.date, balanceAfter: null })) } : null;
+  // minProjectedCashBefore precisa de balanceAfter real por evento — recalcula
+  // aqui reaproveitando a MESMA função pura importada de
+  // lib/financialProjection.js (não uma reimplementação paralela).
+  if (baseProjectionLite) {
+    let r = unrestrictedCash;
+    baseProjectionLite.timeline = sortedTimeline.map((e) => {
+      r = addMoney(r, e.amount);
+      return { date: e.date, balanceAfter: r };
+    });
+  }
+
+  const nextIncomeDate = nextIncomeProposed.expectedDate;
+  const currentObligationHorizonEnd = nextIncomeDate ? computeCurrentObligationHorizonEnd(nextIncomeProposed, asOf) : null;
+  const minBaseCashBeforeIncome =
+    baseProjectionLite && currentObligationHorizonEnd ? minProjectedCashBefore(baseProjectionLite, currentObligationHorizonEnd) : null;
+
   // --- nextIncomeCommitment window (proposto, in-memory, sem prisma) ---
   let nextIncomeCommitmentWindow = null;
   if (nextIncomeProposed.expectedDate) {
     const periodStart = nextIncomeProposed.expectedDate;
     const periodEnd = new Date(Date.UTC(periodStart.getUTCFullYear(), periodStart.getUTCMonth() + 1, periodStart.getUTCDate()));
-    const inWindow = [...incurredItems, ...futureItems, ...currentHorizonItems].filter((item) => {
-      const dueDate = item.dueAt ? new Date(item.dueAt) : item.dateCandidates ? d(item.dateCandidates[0]) : null;
-      return dueDate && isWithinNextIncomeCommitmentWindow(dueDate, periodStart, periodEnd);
-    });
-    nextIncomeCommitmentWindow = { periodStart: periodStart.toISOString(), periodEnd: periodEnd.toISOString(), note: "Cálculo aproximado — ver limitação abaixo sobre CardBill.dueAt não vir do input estruturado por data." };
+    const committedAmount = sumMoney(
+      sortedTimeline.filter((e) => e.kind !== "recurring_income" && isWithinNextIncomeCommitmentWindow(e.date, periodStart, periodEnd)).map((e) => e.amount.negated())
+    );
+    const committedPercent =
+      expectedRecurringAmount != null && isPositive(expectedRecurringAmount)
+        ? multiplyMoney(divideMoney(committedAmount, expectedRecurringAmount), 100)
+        : null; // nunca inventa denominador (item 16).
+    nextIncomeCommitmentWindow = {
+      periodStart: periodStart.toISOString(),
+      periodEnd: periodEnd.toISOString(),
+      expectedIncomeAmount: expectedRecurringAmount?.toString() ?? "UNKNOWN",
+      committedAmount: committedAmount.toString(),
+      committedPercent: committedPercent != null ? committedPercent.toString() : null,
+      completeness: expectedRecurringAmount != null ? COMPLETENESS.COMPLETE : COMPLETENESS.PARTIAL,
+    };
   }
+
+  // --- financialStatus (item 15) — usa a função REAL de lib/financialStatus.js. ---
+  let financialStatus = null;
+  let financialStatusCompleteness = COMPLETENESS.INCOMPLETE;
+  if (freeMoney != null && baseProjectionLite && currentObligationHorizonEnd) {
+    const result = computeFinancialStatus({
+      freeMoney,
+      nextIncomeDate,
+      currentObligationHorizonEnd,
+      nextIncomeStatus: nextIncomeProposed.status,
+      baseProjection: baseProjectionLite,
+      expectedProjection: undefined,
+      stressProjection: undefined,
+      unfundedConfirmedCommitments,
+    });
+    // A função só PRECISA de expectedProjection/stressProjection pra decidir
+    // entre TRANQUILO e ATENCAO (a árvore de decisão passa por CRITICO/APERTADO
+    // antes) — se o resultado veio de CRITICO ou APERTADO, é determinado só com
+    // dado que JÁ temos completo (freeMoney + minBaseCashBeforeIncome). Se
+    // caísse em TRANQUILO/ATENCAO por causa da ausência de projeção completa,
+    // isso seria confiar em "nenhuma razão encontrada" como se fosse
+    // "confirmadamente tranquilo" — não inventamos essa certeza.
+    const decidedWithoutFullProjection = result.status === "CRITICO" || result.status === "APERTADO";
+    financialStatus = { status: decidedWithoutFullProjection ? result.status : "INDETERMINATE_NEEDS_FULL_PROJECTION", reasons: result.reasons, realStatusIfForced: result.status };
+    financialStatusCompleteness = decidedWithoutFullProjection ? COMPLETENESS.COMPLETE : COMPLETENESS.PARTIAL;
+    if (!decidedWithoutFullProjection) {
+      missing.push({
+        field: "financialStatus",
+        impact: "resultado do branch CRITICO/APERTADO não se aplica (freeMoney>=0 e cash físico não fica negativo) — decidir entre TRANQUILO/ATENÇÃO exige expected/stress projection completos, que dependem de Contingency/ConfirmedCommitment persistidos (Fase 5.1)",
+        evidenceNeeded: "projeção expected/stress completa (pós-persistência)",
+      });
+    }
+  }
+
+  // --- completeness granular (item 10) ---
+  const freeMoneyCompleteness = freeMoney != null ? COMPLETENESS.COMPLETE : COMPLETENESS.INCOMPLETE;
+  const safeToSpendCompleteness = freeMoneyCompleteness;
+  const baseProjectionCompleteness = !baseProjectionLite ? COMPLETENESS.INCOMPLETE : projectionCrossesUnknownIncomeAmount ? COMPLETENESS.PARTIAL : COMPLETENESS.COMPLETE;
+  const expectedProjectionCompleteness =
+    baseProjectionCompleteness === COMPLETENESS.INCOMPLETE ? COMPLETENESS.INCOMPLETE : undatedRiskExposures.length > 0 || projectionCrossesUnknownIncomeAmount ? COMPLETENESS.PARTIAL : COMPLETENESS.COMPLETE;
+  const stressProjectionCompleteness = expectedProjectionCompleteness;
+  const nextIncomeCompleteness = !nextIncomeProposed.expectedDate ? COMPLETENESS.INCOMPLETE : expectedRecurringAmount != null ? COMPLETENESS.COMPLETE : COMPLETENESS.PARTIAL;
+  const nextIncomeCommitmentCompleteness = nextIncomeCommitmentWindow?.completeness ?? COMPLETENESS.INCOMPLETE;
+
+  const componentCompletenesses = [
+    freeMoneyCompleteness,
+    safeToSpendCompleteness,
+    baseProjectionCompleteness,
+    expectedProjectionCompleteness,
+    stressProjectionCompleteness,
+    nextIncomeCompleteness,
+    nextIncomeCommitmentCompleteness,
+    financialStatusCompleteness,
+  ];
+  const overallCompleteness = componentCompletenesses.includes(COMPLETENESS.INCOMPLETE)
+    ? COMPLETENESS.INCOMPLETE
+    : componentCompletenesses.includes(COMPLETENESS.PARTIAL)
+      ? COMPLETENESS.PARTIAL
+      : COMPLETENESS.COMPLETE;
 
   return {
     balances: {
@@ -545,25 +1016,39 @@ function engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings
     safeToSpend: safeToSpend ? { safetyMarginPercent: safeToSpend.safetyMarginPercent, safetyReserve: safeToSpend.safetyReserve.toString(), safeToSpend: safeToSpend.safeToSpend.toString() } : "INCOMPLETE",
     nextIncome: {
       currentDbState: nextIncomeFromDb,
-      proposedIfSalaryRuleExisted: {
+      proposedIfScheduleRuleExisted: {
         expectedDate: nextIncomeProposed.expectedDate?.toISOString() ?? null,
         status: nextIncomeProposed.status,
         isFallback: nextIncomeProposed.isFallback,
-        note: "RecurringRule de salário AINDA NÃO existe no banco (só a de VA existe) — este valor é hipotético, calculado com resolveNextExpectedIncome() PURO sobre uma RecurringRule proposta (dayOfMonth=24), NÃO persistido.",
+        scheduleConfidence,
+        recurringAmountConfidence,
+        expectedRecurringAmount: expectedRecurringAmount?.toString() ?? "UNKNOWN",
+        note: "Schedule (dia do mês) e AMOUNT recorrente são evidências SEPARADAS — o valor só é usado se recurringAmountConfidence vier explicitamente confirmado no input. RecurringRule ainda NÃO existe no banco (hipotético, não persistido).",
       },
     },
     nextIncomeCommitment: nextIncomeCommitmentWindow,
-    contingencyExposure: { expected: contingencyExpected.toString(), maximum: contingencyMax.toString(), items: contingencyItems, entersFreeMoneyBase: false },
-    projections: {
-      status: "INCOMPLETE",
-      reason:
-        "base/expected/stress (lib/financialProjection.js) leem CardBill/Bill/ExternalInstallment/ConfirmedCommitment/Contingency " +
-        "DIRETAMENTE do banco via Prisma — não aceitam obrigações em memória. Os ConfirmedCommitment/Contingency propostos " +
-        "neste snapshot ainda não estão persistidos (Fase 5.0 é estritamente read-only), então a projeção de 90 dias não pode " +
-        "incluí-los sem inventar dados. Rodar a projeção completa com estes fatos exige a persistência da Fase 5.1 primeiro.",
+    contingencyExposure: { expected: contingencyExpected.toString(), maximum: contingencyMax.toString(), items: contingencyItems, undatedRiskExposures, entersFreeMoneyBase: false },
+    minBaseCashBeforeNextIncome: minBaseCashBeforeIncome?.toString() ?? null,
+    baseTimeline: timelineWithBalances,
+    financialStatus,
+    completeness: {
+      freeMoneyCompleteness,
+      safeToSpendCompleteness,
+      baseProjectionCompleteness,
+      expectedProjectionCompleteness,
+      stressProjectionCompleteness,
+      nextIncomeCompleteness,
+      nextIncomeCommitmentCompleteness,
+      financialStatusCompleteness,
+      overallCompleteness,
     },
+    projectionsNote:
+      "Timeline física construída 100% EM MEMÓRIA a partir do input proposto (card bills com dueAt real via lib/cardCycle.js, " +
+      "ConfirmedCommitment com placeholder conservador de data, Contingency SEM data nunca inserida na timeline). " +
+      "PARTIAL quando a projeção cruza uma ocorrência de renda com valor recorrente não confirmado, ou quando existe " +
+      "exposição de contingência sem data (UNDATED_RISK_EXPOSURE) dentro do horizonte de 90 dias.",
     missingEvidence: missing,
-    status: missing.length > 0 ? "INCOMPLETE" : "COMPLETE",
+    status: overallCompleteness,
   };
 }
 
@@ -641,12 +1126,12 @@ function buildProposedCanonicalSnapshot(input, cardReconciliation) {
 // ============================================================================
 function buildProposedMutations(input, inventory, checkingRecon, vaRecon, cardRecon) {
   const mutations = [];
-  const push = (m) => mutations.push(m);
+  const push = (m) => mutations.push({ blocker: null, riskOfDoubleCounting: "nenhum identificado", ...m });
 
   push({
     category: "KEEP",
-    model: "Account/Card/Purchase/Installment/RecurringRule já existentes",
-    reference: "todos os registros já existentes no banco dev",
+    model: "Account/Card/RecurringRule já existentes",
+    reference: "todos os registros estruturais já existentes no banco dev",
     before: "estado atual do dev (ver seção B — inventário)",
     after: "sem mudança",
     reason: "Nada nesta fase indica que esses registros estruturais estejam errados — só desatualizados em VALOR (que é reconciliação de dado, não de estrutura).",
@@ -656,41 +1141,72 @@ function buildProposedMutations(input, inventory, checkingRecon, vaRecon, cardRe
     requiredToClose: false,
   });
 
-  if (cardRecon?.persistedVsKnownReality?.some((r) => r.looksLikeMaterializationArtifact)) {
-    const mismatched = cardRecon.persistedVsKnownReality.filter((r) => r.looksLikeMaterializationArtifact);
-    push({
-      category: "LEAVE_AS_LEGACY",
-      model: "CardBill",
-      reference: `${mismatched.length} CardBill(s) persistida(s) cujo valor não bate com a realidade conhecida informada no input (cycleMonths: ${mismatched.map((r) => r.cycleMonth).join(", ")})`,
-      before: "valores computados a partir de Purchase/Expense do dev, divergentes da realidade bancária informada",
-      after: "sem mudança nesta fase — não apagar (Fase 4.1.3 item 7 e item 36 desta fase)",
-      reason: "Prováveis artefatos do comportamento antigo de materialização (corrigido na Fase 4.1.3) ou dados de teste/legado. Apagar destruiria histórico sem necessidade — reconciliação real deve SOBRESCREVER com evidência (ver CREATE abaixo), não deletar.",
-      source: "achado desta auditoria (seção O)",
-      confidence: "N/A",
-      risk: "baixo (dados de teste/desenvolvimento, não dinheiro real)",
-      requiredToClose: false,
-    });
-  }
-
-  if (input.card?.bills?.length > 0) {
-    push({
-      category: "CREATE",
-      model: "CardBill (ou correção via nova âncora)",
-      reference: `${input.card.bills.length} ciclo(s) conhecido(s) do cartão informado no input (ver seção N)`,
-      before: "valores computados divergentes (ver LEAVE_AS_LEGACY acima, se aplicável)",
-      after: "CardBill com totalAmount/paidAmount/status refletindo a realidade bancária confirmada no input",
-      reason: "É o núcleo da reconciliação do cartão — sem isso, incurredLiabilities/futureObligations do Financial Engine real continuam errados.",
-      source: "input do usuário (checkpoint bancário direto)",
-      confidence: "conforme confidence de cada bill no input",
-      risk: "médio — precisa decidir COMO reescrever CardBill.closingDay no Card real (hoje possivelmente diferente) sem quebrar histórico já materializado com a fórmula anterior",
-      requiredToClose: true,
-    });
+  // --- CardBill: UPDATE por row existente (nunca CREATE — constraint
+  // cardId+cycleMonth já garante 1 row por ciclo), DELETE_ARTIFACT_CANDIDATE
+  // pros artefatos zerados, NEEDS_EVIDENCE pros UNKNOWN. ---
+  for (const cb of cardRecon?.persistedCardBillsClassified || []) {
+    if (cb.classification === "CANONICAL_UPDATE_CANDIDATE") {
+      push({
+        category: "UPDATE",
+        model: "CardBill",
+        reference: `id=${cb.id} (cycleMonth=${cb.cycleMonth})`,
+        before: `totalAmount=${cb.totalAmount}, paidAmount=${cb.paidAmount}, status=${cb.status}`,
+        after: `totalAmount=${cb.knownRealAmount} (+ paidAmount/status derivados da realidade bancária confirmada)`,
+        reason: cb.reasoning,
+        source: "input do usuário (checkpoint bancário direto) cruzado com achado desta auditoria (seção N/O)",
+        confidence: "conforme confidence da bill correspondente no input",
+        risk: "médio — mudar Card.closingDay (mutation separada abaixo) também muda closesAt/dueAt desta mesma row; coordenar as duas mutações juntas, não isoladamente",
+        riskOfDoubleCounting: "nenhum — é UPDATE de uma row já existente, não criação de uma nova (a constraint cardId+cycleMonth impede duplicata)",
+        requiredToClose: true,
+      });
+    } else if (cb.classification === "KEEP_OR_PARTIAL_MATCH") {
+      push({
+        category: "KEEP",
+        model: "CardBill",
+        reference: `id=${cb.id} (cycleMonth=${cb.cycleMonth})`,
+        before: `totalAmount=${cb.totalAmount}`,
+        after: "sem mudança de totalAmount — mas revisar closesAt/dueAt se Card.closingDay mudar",
+        reason: cb.reasoning,
+        source: "achado desta auditoria (seção N/O)",
+        confidence: "N/A",
+        risk: "baixo",
+        requiredToClose: false,
+      });
+    } else if (cb.classification === "CLEAR_ARTIFACT_CANDIDATE") {
+      push({
+        category: "DELETE_ARTIFACT_CANDIDATE",
+        model: "CardBill",
+        reference: `id=${cb.id} (cycleMonth=${cb.cycleMonth}, totalAmount=0)`,
+        before: `row zerada, sem paidAmount, sem Transfer vinculado (Transfer.count=0 no banco inteiro)`,
+        after: "remoção proposta — SEM efeito no cálculo do engine hoje (remaining=0 já é sempre SETTLED/ignorado por lib/obligationClassifier.js), efeito é só cosmético na UI de /cartoes",
+        reason: cb.reasoning,
+        source: "achado desta auditoria (seção N/O) — padrão de lote de materialização, Fase 4.1.2/4.1.3",
+        confidence: "N/A",
+        risk: "baixo — nenhum pagamento/transfer vinculado encontrado (verificado); ainda assim, revisar item a item antes de apagar, nunca em lote automático",
+        riskOfDoubleCounting: "N/A — remoção, não criação",
+        requiredToClose: false,
+      });
+    } else if (cb.classification === "UNKNOWN") {
+      push({
+        category: "NEEDS_EVIDENCE",
+        model: "CardBill",
+        reference: `id=${cb.id} (cycleMonth=${cb.cycleMonth}, totalAmount=${cb.totalAmount})`,
+        before: `totalAmount=${cb.totalAmount}, sem valor real conhecido para este ciclo no input`,
+        after: "N/A — nenhuma mutação proposta até o usuário confirmar se este valor reflete atividade real do cartão neste ciclo",
+        reason: cb.reasoning,
+        source: "achado desta auditoria (seção N/O)",
+        confidence: "UNCERTAIN",
+        risk: "médio se remaining>0 (contamina incurred/future) — ver wouldContaminateEngineIfLeftAsIs",
+        requiredToClose: cb.wouldContaminateEngineIfLeftAsIs,
+      });
+    }
   }
 
   if (input.card?.closingDay != null) {
     const currentClosingDay = inventory.card?.rows?.[0]?.closingDay ?? null;
+    const same = currentClosingDay === input.card.closingDay;
     push({
-      category: currentClosingDay === input.card.closingDay ? "KEEP" : "UPDATE",
+      category: same ? "KEEP" : "UPDATE",
       model: "Card",
       reference: "closingDay do cartão informado no input",
       before: `closingDay=${currentClosingDay === undefined ? "desconhecido" : currentClosingDay}`,
@@ -698,97 +1214,79 @@ function buildProposedMutations(input, inventory, checkingRecon, vaRecon, cardRe
       reason: "Sem o closingDay real, getCardBillClosesAt/getCardBillDueDate usam a fórmula de fallback (mês calendário), que pode divergir do fechamento real do cartão.",
       source: "input do usuário",
       confidence: "conforme input",
-      risk: currentClosingDay === input.card.closingDay ? "nenhum — já está correto" : "médio — muda o resultado de getCardCycleForDate pra TODAS as CardBills futuras; rodar acompanhado da correção de valores acima, não isoladamente",
-      requiredToClose: currentClosingDay !== input.card.closingDay,
+      risk: same ? "nenhum — já está correto" : "médio — muda closesAt/dueAt de TODAS as CardBills existentes e futuras; rodar JUNTO com os UPDATEs de CardBill acima, não isoladamente (senão os dois ficam temporariamente inconsistentes entre si)",
+      requiredToClose: !same,
     });
   }
 
-  if (input.checkingAccount) {
-    push({
-      category: "CREATE",
-      model: "BalanceAdjustment",
-      reference: "Account irrestrita informada no input (checkingAccount)",
-      before: "última âncora existente no banco (ver seção B — inventário)",
-      after: `newBalance=${money(input.checkingAccount.checkpointB.amount).toString()} (checkpointB, ${input.checkingAccount.checkpointB.date})`,
-      reason: "Forma canônica já suportada pelo schema de estabelecer um novo saldo-âncora real, sem inventar histórico de transações que não temos evidência completa (ver derivedOpeningBalance=DERIVED_ONLY).",
-      source: "input do usuário (extrato/observação direta)",
-      confidence: input.checkingAccount.checkpointB.confidence,
-      risk: "baixo — mesmo mecanismo de âncora já usado pelo resto do app (mesmo padrão de CardLimitUpdate)",
-      requiredToClose: true,
-    });
-
-    if (checkingRecon?.unexplainedDifference && checkingRecon.unexplainedDifference !== "0") {
+  // --- Purchase(s) parceladas encontradas: NEEDS_EVIDENCE, nunca legacy/test
+  // sem prova — usa o resultado real da auditoria (seção N). ---
+  if (cardRecon?.purchaseAudit?.status === "FOUND") {
+    for (const pa of cardRecon.purchaseAudit.purchases) {
+      const partialMonths = pa.answerB_explainsRecurringComponent.filter((c) => c.explainsPartial).map((c) => c.billMonth);
       push({
-        category: "UNRESOLVED",
-        model: "BalanceAdjustment / delta não explicado",
-        reference: `diferença entre saldo matemático esperado (${checkingRecon.mathematicalExpected}) e observado (${checkingRecon.checkpointB.amount})`,
-        before: "N/A",
-        after: "N/A — NENHUMA ação proposta",
-        reason: "Delta não explicado por nenhuma evidência disponível. Regra explícita do usuário: NÃO criar RECONCILIATION_ADJUSTMENT só pra fechar um delta pequeno sem investigação completa.",
-        source: "N/A",
-        confidence: "UNCERTAIN",
-        risk: "depende da magnitude do delta — fica registrado como não resolvido, nunca escondido",
+        category: pa.answerE_conclusion === "LIKELY_REAL" && partialMonths.length === 0 ? "KEEP" : "NEEDS_EVIDENCE",
+        model: "Purchase/Installment",
+        reference: `id=${pa.purchase.id} ("${pa.purchase.description.slice(0, 60)}...")`,
+        before: `explica exatamente ${pa.answerB_explainsRecurringComponent.filter((c) => c.exactMatch).length} known bill(s), explica PARCIALMENTE ${partialMonths.length} outra(s) (${partialMonths.join(", ") || "nenhuma"})`,
+        after:
+          partialMonths.length > 0
+            ? "NENHUMA mutação proposta nesta própria Purchase — mas os known bills maiores (que ela só explica parcialmente) provavelmente têm OUTRAS compras reais ainda não capturadas no banco, que precisam ser investigadas/lançadas separadamente"
+            : "sem mudança — evidência já suficiente pra manter como está",
+        reason: `Conclusão da auditoria (item 5 do pedido): ${pa.answerE_conclusion}. NÃO marcada como legacy/test — ver evidenceForReal/evidenceForTestOrJunk na seção N/O do relatório completo.`,
+        source: `Purchase.source="${pa.purchase.source}"`,
+        confidence: pa.purchase.confidence ?? "null (não classificado)",
+        risk: "baixo para esta Purchase em si; risco é de SUBESTIMAR o total real das faturas se as compras faltantes não forem encontradas antes da persistência dos CardBills corrigidos",
+        riskOfDoubleCounting: "nenhum — esta Purchase já é read-only nesta fase; risco seria o OPOSTO (subcontagem), não dupla contagem",
         requiredToClose: false,
       });
     }
-
-    for (const m of input.checkingAccount.movementsAfterCheckpointA || []) {
-      if (m.type === "INFLOW") {
-        push({
-          category: "CREATE",
-          model: "Income",
-          reference: m.description,
-          before: "N/A",
-          after: `Income — accountId=<conta informada>, amount=${money(m.amount).toString()}, isRecurring=false (salvo evidência em contrário)`,
-          reason: "É dinheiro NOVO entrando na conta — Income, não Transfer. NÃO vincular a nenhuma RecurringRule sem evidência explícita de que é a mesma ocorrência.",
-          source: "input do usuário",
-          confidence: m.movementConfidence,
-          risk: "baixo",
-          requiredToClose: true,
-        });
-      } else if (m.type === "TRANSFER_OUT_EXTERNAL") {
-        push({
-          category: "CREATE",
-          model: "Transfer",
-          reference: m.description,
-          before: m.formerlyModeledAs ? `anteriormente modelado como: ${m.formerlyModeledAs}` : "N/A",
-          after: `Transfer{ fromAccountId: <conta informada>, toAccountId: null, toCardId: null, kind: 'external_transfer', description: '${m.description}', amount: ${money(m.amount).toString()} }`,
-          reason: "Ver seção de auditoria de schema (R) — já suportado sem migration. NÃO cria Expense, NÃO cria Reserve, NÃO cria Account nova só pra representar o destino.",
-          source: "input do usuário",
-          confidence: m.movementConfidence,
-          risk: "baixo — desde que 'external_transfer' seja adotado como convenção de kind documentada (não uma migration, só um valor de string novo)",
-          requiredToClose: true,
-        });
-      } else if (m.economicClassification === "UNKNOWN") {
-        push({
-          category: "UNRESOLVED",
-          model: "Transfer / Expense / Receivable (classificação econômica ainda não decidida)",
-          reference: m.description,
-          before: "N/A",
-          after: "N/A — aguardando decisão do usuário",
-          reason: "Movimento de caixa confirmado, mas classificação econômica explicitamente UNKNOWN — não presumir presente/pagamento/empréstimo/divisão de despesa sem confirmação.",
-          source: "input do usuário",
-          confidence: `movimento=${m.movementConfidence}, classificação=UNCERTAIN`,
-          risk: "nenhum financeiro — mas bloqueia fechar 100% a modelagem do ledger até decisão",
-          requiredToClose: false,
-        });
-      }
-    }
   }
 
-  if (input.restrictedAccount) {
-    push({
-      category: "CREATE",
-      model: "BalanceAdjustment",
-      reference: "Account restrita informada no input (restrictedAccount)",
-      before: "última âncora existente no banco (ver seção B — inventário)",
-      after: `newBalance=${money(input.restrictedAccount.observedClosing.amount).toString()} (observado, ${input.restrictedAccount.observedClosing.date})`,
-      reason: "Mesma lógica da conta irrestrita — âncora real substitui a anterior.",
-      source: "input do usuário",
-      confidence: input.restrictedAccount.observedClosing.confidence,
-      risk: "baixo",
-      requiredToClose: true,
-    });
+  for (const m of input.checkingAccount?.movementsAfterCheckpointA || []) {
+    if (m.type === "INFLOW") {
+      push({
+        category: "CREATE",
+        model: "Income",
+        reference: m.description,
+        before: "N/A",
+        after: `Income — accountId=<conta informada>, amount=${money(m.amount).toString()}, isRecurring=false (salvo evidência em contrário)`,
+        reason: "É dinheiro NOVO entrando na conta — Income, não Transfer. NÃO vincular a nenhuma RecurringRule sem evidência explícita de que é a mesma ocorrência.",
+        source: "input do usuário",
+        confidence: m.movementConfidence,
+        risk: "baixo",
+        riskOfDoubleCounting: "nenhum, desde que este Income não seja também somado manualmente em nenhum BalanceAdjustment futuro pro mesmo período",
+        requiredToClose: true,
+      });
+    } else if (m.type === "TRANSFER_OUT_EXTERNAL") {
+      push({
+        category: "CREATE",
+        model: "Transfer",
+        reference: m.description,
+        before: m.formerlyModeledAs ? `anteriormente modelado como: ${m.formerlyModeledAs}` : "N/A",
+        after: `Transfer{ fromAccountId: <conta informada>, toAccountId: null, toCardId: null, kind: 'external_transfer', description: '${m.description}', amount: ${money(m.amount).toString()} }`,
+        reason: "Ver seção de auditoria de schema (R) — já suportado sem migration. NÃO cria Expense, NÃO cria Reserve, NÃO cria Account nova só pra representar o destino.",
+        source: "input do usuário",
+        confidence: m.movementConfidence,
+        risk: "baixo — desde que 'external_transfer' seja adotado como convenção de kind documentada (não uma migration, só um valor de string novo)",
+        riskOfDoubleCounting: "risco real se uma Reserve pessoal para a mesma finalidade for criada em paralelo — NÃO criar Reserve pessoal pra este valor (ele já saiu fisicamente da conta).",
+        requiredToClose: true,
+      });
+    } else if (m.economicClassification === "UNKNOWN") {
+      push({
+        category: "UNRESOLVED",
+        model: "Transfer / Expense / Receivable (classificação econômica ainda não decidida)",
+        reference: m.description,
+        before: "N/A",
+        after: "N/A — aguardando decisão do usuário",
+        reason: "Movimento de caixa confirmado, mas classificação econômica explicitamente UNKNOWN — não presumir presente/pagamento/empréstimo/divisão de despesa sem confirmação.",
+        source: "input do usuário",
+        confidence: `movimento=${m.movementConfidence}, classificação=UNCERTAIN`,
+        risk: "nenhum financeiro — mas bloqueia fechar 100% a modelagem do ledger até decisão",
+        blocker: "classificação econômica pendente de decisão do usuário",
+        requiredToClose: false,
+      });
+    }
   }
 
   if (input.mainIncome) {
@@ -797,8 +1295,8 @@ function buildProposedMutations(input, inventory, checkingRecon, vaRecon, cardRe
       model: "RecurringRule (proposta) + Income.recurringOccurrenceDate",
       reference: `renda principal informada no input (dayOfMonth=${input.mainIncome.dayOfMonth})`,
       before: "Nenhuma RecurringRule cobrindo essa renda existe hoje no banco (ver seção Q)",
-      after: `RecurringRule{ kind:'income', dayOfMonth:${input.mainIncome.dayOfMonth}, amount:${money(input.mainIncome.amount).toString()} } + Income vinculado via recurringOccurrenceDate=${input.mainIncome.date}`,
-      reason: "Formaliza a renda principal, hoje invisível pro Financial Engine (que cai em FALLBACK sem ela).",
+      after: `RecurringRule{ kind:'income', dayOfMonth:${input.mainIncome.dayOfMonth} } (SEM amount fixo, salvo recurringAmountConfidence confirmado — ver seção Q) + Income vinculado via recurringOccurrenceDate=${input.mainIncome.date}`,
+      reason: "Formaliza a renda principal, hoje invisível pro Financial Engine (que cai em FALLBACK sem ela). Schedule (dia do mês) e amount recorrente são evidências separadas — ver seção Q.",
       source: "input do usuário",
       confidence: input.mainIncome.confidence,
       risk: "baixo",
@@ -807,17 +1305,17 @@ function buildProposedMutations(input, inventory, checkingRecon, vaRecon, cardRe
   }
 
   for (const c of input.confirmedCommitments || []) {
-    const dateNote = (c.dateCandidates || []).length > 1 ? `dueDate ainda ambígua entre: ${c.dateCandidates.join(" ou ")} — decidir antes de persistir` : c.dateCandidates?.[0] ?? "sem data";
+    const dateNote = (c.dateCandidates || []).length > 1 ? `UNCERTAIN_DATE_RANGE entre: ${c.dateCandidates.join(" ou ")} — decidir antes de persistir` : c.dateCandidates?.[0] ?? "sem data";
     push({
       category: "CREATE",
       model: "ConfirmedCommitment",
       reference: c.description,
       before: "N/A",
       after: `ConfirmedCommitment{ description:'${c.description}', amount:${money(c.amount).toString()}, dueDate:<${dateNote}>, status:CONFIRMED, funding:${c.funding} }`,
-      reason: "Compromisso confirmado, funding possivelmente indefinido — exatamente o caso de uso do model.",
+      reason: "Compromisso confirmado, funding possivelmente indefinido — exatamente o caso de uso do model. Classificação de horizonte (freeMoney) já é segura mesmo com a data incerta (ver seção W) — só o dueDate exato precisa ser resolvido antes do INSERT.",
       source: "input do usuário",
       confidence: `amount=${c.amountConfidence}, data=${c.dateConfidence}`,
-      risk: (c.dateCandidates || []).length > 1 ? "médio — data precisa ser resolvida antes de persistir (pode não afetar a classificação de horizonte, ver seção W, mas afeta a projeção diária exata)" : "baixo",
+      risk: (c.dateCandidates || []).length > 1 ? "baixo pra classificação (não muda o bucket), médio pra precisão da projeção diária — resolver a data exata antes de persistir" : "baixo",
       requiredToClose: false,
     });
   }
@@ -828,8 +1326,8 @@ function buildProposedMutations(input, inventory, checkingRecon, vaRecon, cardRe
       model: "Contingency",
       reference: c.description,
       before: "N/A",
-      after: `Contingency{ description:'${c.description}', expectedAmount:${c.expectedAmount != null ? money(c.expectedAmount).toString() : "null"}, maxAmount:${money(c.maxAmount).toString()}, status:${c.status} }`,
-      reason: "Risco aguardando confirmação — não é obrigação confirmada, não deve reduzir freeMoney base.",
+      after: `Contingency{ description:'${c.description}', expectedAmount:${c.expectedAmount != null ? money(c.expectedAmount).toString() : "null"}, maxAmount:${money(c.maxAmount).toString()}, status:${c.status}, expectedDate:null }`,
+      reason: "Risco aguardando confirmação — não é obrigação confirmada, não deve reduzir freeMoney base. Sem expectedDate: exposição fica em contingencyExposure, nunca inserida na timeline com data inventada.",
       source: "input do usuário",
       confidence: `expectedAmount=${c.expectedAmountConfidence}, maxAmount=${c.maxAmountConfidence}`,
       risk: "baixo",
@@ -839,7 +1337,7 @@ function buildProposedMutations(input, inventory, checkingRecon, vaRecon, cardRe
 
   for (const e of input.otherEvidence || []) {
     push({
-      category: "UNRESOLVED",
+      category: "NEEDS_EVIDENCE",
       model: "N/A — evidência incompleta",
       reference: e.description,
       before: "N/A",
@@ -848,11 +1346,57 @@ function buildProposedMutations(input, inventory, checkingRecon, vaRecon, cardRe
       source: "input do usuário (memória, incompleta)",
       confidence: e.confidence,
       risk: "a avaliar quando a evidência completa existir",
+      blocker: "data e/ou conta de destino não determinadas",
       requiredToClose: false,
     });
   }
 
   return mutations;
+}
+
+// ============================================================================
+// Item 2 do pedido — BalanceAdjustment com confidence=RECONCILIATION_ADJUSTMENT
+// é ÚLTIMO RECURSO. NUNCA aparece na lista de mutações aprovadas acima —
+// só aqui, explicitamente separado, explicando sob quais condições futuras
+// seria aceitável. Enquanto os deltas (conta irrestrita/conta restrita)
+// permanecerem não investigados a fundo, nenhum dos dois é proposto pra execução.
+// ============================================================================
+function buildPotentialLastResortMutations(checkingRecon, vaRecon) {
+  const potential = [];
+
+  if (checkingRecon?.unexplainedDifference && checkingRecon.unexplainedDifference !== "0") {
+    potential.push({
+      model: "BalanceAdjustment",
+      reference: "Account irrestrita — delta não explicado",
+      currentDelta: checkingRecon.unexplainedDifference,
+      wouldBe: `BalanceAdjustment{ newBalance: ${checkingRecon.checkpointB.amount}, confidence: RECONCILIATION_ADJUSTMENT }`,
+      status: "NOT_PROPOSED_FOR_EXECUTION",
+      acceptableOnlyIf: [
+        "o saldo observado (checkpointB) for reconfirmado como confiável (ex: segunda leitura do extrato);",
+        "TODAS as fontes de evidência disponíveis tiverem sido investigadas (extrato completo, notificações do banco, possíveis rendimentos/tarifas);",
+        "o delta permanecer inexplicado mesmo assim;",
+        "o usuário decidir explicitamente que precisa fechar o ledger operacional para seguir em frente, aceitando o resíduo como ajuste de reconciliação (não como fato reconstruído).",
+      ],
+    });
+  }
+
+  if (vaRecon?.residualOpeningFromKnownLedger && vaRecon.residualOpeningFromKnownLedger !== "0") {
+    potential.push({
+      model: "BalanceAdjustment",
+      reference: "Account restrita — residual não explicado pelo ledger conhecido",
+      currentDelta: vaRecon.residualOpeningFromKnownLedger,
+      wouldBe: `BalanceAdjustment{ newBalance: ${vaRecon.observedClosing.amount}, confidence: RECONCILIATION_ADJUSTMENT }`,
+      status: "NOT_PROPOSED_FOR_EXECUTION",
+      acceptableOnlyIf: [
+        "a fonte externa (extrato do vale-refeição/CSV — ver externalSourceInvestigation) for obtida e efetivamente não explicar o residual;",
+        "os reviewCandidates desta reconciliação (padrão de backfill em lote, income atípico, data de recarga divergente) tiverem sido investigados individualmente;",
+        "o residual permanecer sem explicação mesmo assim;",
+        "o usuário decidir explicitamente aceitar o ajuste pra iniciar o ledger operacional da conta restrita.",
+      ],
+    });
+  }
+
+  return potential;
 }
 
 // ============================================================================
@@ -869,11 +1413,28 @@ function collectBlockers({ input, checkingRecon, vaRecon, engineResult, cardReco
   if (checkingRecon?.unexplainedDifference && checkingRecon.unexplainedDifference !== "0") {
     blockers.push({ area: "Delta não explicado na conta irrestrita", description: `unexplainedDifference=${checkingRecon.unexplainedDifference} — ver seção G.` });
   }
-  if (vaRecon?.unexplainedDifferenceVA && vaRecon.unexplainedDifferenceVA !== "0") {
-    blockers.push({ area: "Delta não explicado na conta restrita (VA)", description: `unexplainedDifferenceVA=${vaRecon.unexplainedDifferenceVA}` });
+  if (vaRecon?.residualOpeningFromKnownLedger && vaRecon.residualOpeningFromKnownLedger !== "0") {
+    blockers.push({
+      area: "Residual não explicado na conta restrita",
+      description: `residualOpeningFromKnownLedger=${vaRecon.residualOpeningFromKnownLedger} — ledger conhecido incompleto, não evidência de saldo negativo. Ver reviewCandidates.`,
+    });
+  }
+  for (const rc of vaRecon?.reviewCandidates || []) {
+    blockers.push({ area: `Conta restrita — ${rc.kind}`, description: rc.description, implication: rc.implication });
+  }
+  if (vaRecon?.externalSourceInvestigation?.classification === "MISSING_EXTERNAL_SOURCE_FILE") {
+    blockers.push({ area: "Fonte externa (CSV/extrato do vale-refeição)", description: vaRecon.externalSourceInvestigation.note });
   }
   if (cardRecon?.usedLimitChecksum && !cardRecon.usedLimitChecksum.matches) {
     blockers.push({ area: "Cartão — checksum de limite usado", description: "Soma das faturas conhecidas não bate com o limite usado observado." });
+  }
+  for (const cb of cardRecon?.persistedCardBillsClassified || []) {
+    if (cb.wouldContaminateEngineIfLeftAsIs) {
+      blockers.push({
+        area: `CardBill contaminando o engine: cycleMonth=${cb.cycleMonth}`,
+        description: `id=${cb.id}, classification=${cb.classification} — remaining=${cb.remainingAmount} > 0, então esta row É USADA HOJE por incurredLiabilities/futureObligations com o valor ERRADO (${cb.totalAmount} em vez de ${cb.knownRealAmount ?? "valor real desconhecido"}).`,
+      });
+    }
   }
   for (const m of engineResult.missingEvidence) blockers.push({ area: `Engine: ${m.field}`, description: m.impact, evidenceNeeded: m.evidenceNeeded });
   for (const m of input.checkingAccount?.movementsAfterCheckpointA || []) {
@@ -919,10 +1480,11 @@ async function main() {
     nextIncomeProposed = resolveNextExpectedIncome({ now: d(input.asOf), recurringRules: [syntheticRule], realizedIncomes: [], accounts: [], settings });
   }
 
-  const engineResult = engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings: settings });
+  const engineResult = engineDryRun(input, { nextIncomeProposed, nextIncomeFromDb, appSettings: settings, asOf: d(input.asOf) });
   const confidenceMatrix = buildConfidenceMatrix(input);
   const proposedCanonicalSnapshot = buildProposedCanonicalSnapshot(input, cardRecon);
   const proposedMutations = buildProposedMutations(input, inventory, checkingRecon, vaRecon, cardRecon);
+  const potentialLastResortMutations = buildPotentialLastResortMutations(checkingRecon, vaRecon);
   const blockers = collectBlockers({ input, checkingRecon, vaRecon, engineResult, cardRecon, schemaAudit });
 
   const report = {
@@ -944,17 +1506,36 @@ async function main() {
     H_checkingReconciliationComplete: checkingRecon.finalChecksum,
     I_derivedOpeningBalanceCheckingAccount: checkingRecon.derivedOpeningBalance,
     J_evidencedOpeningBalanceCheckingAccount: checkingRecon.derivedOpeningBalance.openingBalanceEvidence === "EVIDENCED" ? checkingRecon.derivedOpeningBalance : { status: "NONE", reason: "Sem evidência independente (extrato completo do período) fornecida a este dry-run." },
+    // Item 1 — K/L/M corrigidos: derivedOpeningBalance NUNCA é a recarga.
     K_restrictedAccountLedgerCandidate: vaRecon,
-    L_restrictedAccountReconciliation: { unexplainedDifference: vaRecon.unexplainedDifferenceVA, investigation: vaRecon.investigationNote },
-    M_derivedOpeningBalanceRestrictedAccount: vaRecon.derivedOpeningBalanceVA,
+    L_restrictedAccountReconciliation: {
+      knownNetMovements: vaRecon.knownNetMovements,
+      residualOpeningFromKnownLedger: vaRecon.residualOpeningFromKnownLedger,
+      derivedOpeningBalance: vaRecon.derivedOpeningBalance,
+      unexplainedOutflowsOrMissingEvidence: vaRecon.unexplainedOutflowsOrMissingEvidence,
+      openingBalanceEvidence: vaRecon.openingBalanceEvidence,
+      investigation: vaRecon.investigationNote,
+      reviewCandidates: vaRecon.reviewCandidates,
+      externalSourceInvestigation: vaRecon.externalSourceInvestigation,
+    },
+    M_derivedOpeningBalanceRestrictedAccount: { value: "INDETERMINATE", basis: "recharge NÃO é opening balance — ver seção L", openingBalanceEvidence: "MISSING" },
     N_cardReconciliation: cardRecon,
-    O_persistedVsProjectedCardBills: { persistedInDb: cardRecon.persistedCardBillsInDb, comparisonAgainstKnownReality: cardRecon.persistedVsKnownReality },
+    O_persistedVsCanonicalCardBills: {
+      persistedInDb: cardRecon.persistedCardBillsInDb,
+      classified: cardRecon.persistedCardBillsClassified,
+      cardBillUniqueConstraint: cardRecon.cardBillUniqueConstraint,
+      observedVsUnderlyingPurchasesExplained: cardRecon.observedVsUnderlyingPurchasesExplained,
+    },
     P_externalInstallments: (input.externalInstallmentPlans || []).length > 0 ? input.externalInstallmentPlans : { status: "MISSING_EVIDENCE", note: "Nenhum plano com evidência suficiente informado neste snapshot." },
+    P2_purchaseAudit: cardRecon.purchaseAudit,
     Q_recurringIncomeProposal: {
       currentDbState: nextIncomeFromDb,
-      proposed: input.mainIncome
-        ? { kind: "income", dayOfMonth: input.mainIncome.dayOfMonth, amount: money(input.mainIncome.amount).toString(), occurrenceToLink: input.mainIncome.date }
+      proposedScheduleOnly: input.mainIncome
+        ? { kind: "income", dayOfMonth: input.mainIncome.dayOfMonth, scheduleConfidence: engineResult.nextIncome.proposedIfScheduleRuleExisted.scheduleConfidence, occurrenceToLink: input.mainIncome.date, occurrenceAmount: money(input.mainIncome.amount).toString(), occurrenceAmountConfidence: input.mainIncome.confidence }
         : { status: "MISSING_EVIDENCE" },
+      expectedRecurringAmount: engineResult.nextIncome.proposedIfScheduleRuleExisted.expectedRecurringAmount,
+      recurringAmountConfidence: engineResult.nextIncome.proposedIfScheduleRuleExisted.recurringAmountConfidence,
+      note: "Schedule (dayOfMonth) e AMOUNT recorrente futuro são evidências SEPARADAS (item 16) — o valor observado em UMA ocorrência (occurrenceAmount) não é automaticamente o valor recorrente futuro (expectedRecurringAmount), salvo confirmação explícita via recurringAmountConfidence no input.",
       nextIncomeIfProposedRuleExisted: { expectedDate: nextIncomeProposed.expectedDate?.toISOString?.() ?? nextIncomeProposed.expectedDate, status: nextIncomeProposed.status },
     },
     R_externalTransfers: { facts: input.externalTransfers || [], schemaAudit },
@@ -964,6 +1545,7 @@ async function main() {
     V_proposedCanonicalSnapshot: proposedCanonicalSnapshot,
     W_financialEngineDryRun: engineResult,
     X_proposedMutationsForFase51: proposedMutations,
+    X2_potentialLastResortMutations_NOT_APPROVED: potentialLastResortMutations,
     Y_missingEvidenceBlockers: blockers,
   };
 
@@ -988,4 +1570,17 @@ if (isMain) {
     .finally(() => prisma.$disconnect());
 }
 
-export { main, buildInventory, reconcileCheckingLedger, reconcileRestrictedLedger, reconcileCard, engineDryRun, auditTransferSchemaForExternalScope };
+export {
+  main,
+  buildInventory,
+  reconcileCheckingLedger,
+  reconcileRestrictedLedger,
+  reconcileCard,
+  engineDryRun,
+  auditTransferSchemaForExternalScope,
+  classifyPersistedCardBills,
+  buildProposedMutations,
+  buildPotentialLastResortMutations,
+  confirmCardBillUniqueConstraint,
+  auditPurchasesAgainstKnownBills,
+};

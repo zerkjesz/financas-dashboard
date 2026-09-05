@@ -53,7 +53,9 @@
     "amount": 3000.00,
     "date": "2026-01-01",
     "dayOfMonth": 1,
-    "confidence": "CONFIRMED"
+    "confidence": "CONFIRMED",
+    "scheduleConfidence": "CONFIRMED_BY_MEMORY",
+    "recurringAmountConfidence": null
   },
 
   "card": {
