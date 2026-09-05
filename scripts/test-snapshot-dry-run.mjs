@@ -34,6 +34,7 @@ import {
   auditExternalInstallmentSettlementSemantics,
   buildCardBillManifestById,
   buildFullApplyManifest,
+  simulateApprovedOnlyPersistedState,
   buildMutationOrdering,
   buildAtomicityStrategy,
   buildPreflightAssertions,
@@ -1092,6 +1093,98 @@ console.log("--- Fase 5.0.1: testes sintéticos do snapshot-dry-run ---\n");
   const run1 = await buildFullApplyManifest(input, { cardRecon, itauOperationalLedger: { status: "NOT_PROVIDED" }, centLevelScenarios: { status: "NO_CENT_LEVEL_AMBIGUITY" } });
   const run2 = await buildFullApplyManifest(input, { cardRecon, itauOperationalLedger: { status: "NOT_PROVIDED" }, centLevelScenarios: { status: "NO_CENT_LEVEL_AMBIGUITY" } });
   check("buildFullApplyManifest é determinístico pro mesmo input+estado do banco", JSON.stringify(run1) === JSON.stringify(run2));
+}
+
+// ============================================================================
+// Fase 5.1A (correção pedida pelo usuário) — política "canônico vence" pra
+// ambiguidade near-amount de candidato ÚNICO: vira UPDATE aprovado, nunca
+// fica silenciosamente BLOCKED; MULTIPLE_*_CANDIDATES continua BLOCKED (não
+// sabemos QUAL row). reconcileItauOperationalLedger.movementCount também
+// testado aqui. Dados 100% fictícios.
+// ============================================================================
+{
+  const evidence = { operationalLedgerCandidates: [{ amount: 10 }, { amount: -5 }, { amount: 3 }] };
+  const withCount = reconcileItauOperationalLedger(evidence, { checkpointA: 100, operationalHistoryStart: null });
+  check("reconcileItauOperationalLedger expõe movementCount (evita erro de contagem em prosa/relatório)", withCount.movementCount === 3);
+
+  const suffix = Date.now() + 1;
+  const vaAccount = await prisma.account.create({ data: { slug: `teste-fase51a-policy-va-${suffix}`, name: `[${MARK}] VA política fictícia`, type: "food_voucher" } });
+  const soleCandidate = await prisma.expense.create({ data: { amount: money(19.95), description: `[${MARK}] único candidato remanescente`, accountId: vaAccount.id, occurredAt: new Date("2026-01-10T00:00:00.000Z") } });
+
+  try {
+    const input = { asOf: "2026-01-20", checkingAccount: { movementsAfterCheckpointA: [] }, restrictedAccount: { slug: vaAccount.slug, canonicalExpenses: [{ date: "2026-01-03", counterparty: "Loja Única", amount: 20.0, confidence: "CONFIRMED_BY_MEMORY" }] }, confirmedCommitments: [], contingencies: [] };
+    const cardRecon = { cardBillManifestById: [] };
+    const vaExpenseMatchingSingle = { matches: [{ date: "2026-01-03", counterparty: "Loja Única", amount: "20", classification: "AMBIGUOUS_MATCH", matchType: "NEAR_AMOUNT", matchedDevExpenseId: soleCandidate.id, matchedDevAmount: "19.95", delta: "-0.05" }] };
+    const centLevelScenariosSingle = buildCentLevelScenarios(input.restrictedAccount.canonicalExpenses, vaExpenseMatchingSingle, { recharge: 1000, observedClosing: 900 });
+
+    const manifestSingle = await buildFullApplyManifest(input, { cardRecon, itauOperationalLedger: { status: "NOT_PROVIDED" }, centLevelScenarios: centLevelScenariosSingle, vaExpenseMatching: vaExpenseMatchingSingle });
+    const updateEntry = manifestSingle.find((m) => m.model.includes("Expense (conta restrita)") && m.existingRecordId === soleCandidate.id);
+    check("[política canônico-vence] candidato ÚNICO near-amount vira UPDATE aprovado, nunca fica BLOCKED por ambiguidade", updateEntry?.operation === "UPDATE" && updateEntry?.status === "APPROVED_CANDIDATE");
+    check("UPDATE de candidato único carrega _accountEffects estruturado (não string-parsing)", Array.isArray(updateEntry?._accountEffects) && updateEntry._accountEffects.some((e) => e.accountId === vaAccount.id));
+    const vaOpeningEntry = manifestSingle.find((m) => m.naturalKey === "VA_OPENING_ANCHOR");
+    check("[política canônico-vence] âncora de abertura da VA vira DEFER (nunca BLOCKED) quando a ambiguidade já foi resolvida por política", vaOpeningEntry?.status === "DEFER");
+
+    const vaExpenseMatchingMultiple = { matches: [{ date: "2026-01-03", counterparty: "Loja Única", amount: "20", classification: "AMBIGUOUS_MATCH", matchType: "MULTIPLE_NEAR_AMOUNT_CANDIDATES", candidateDevExpenseIds: [soleCandidate.id, "outro-id-fake"] }] };
+    const manifestMultiple = await buildFullApplyManifest(input, { cardRecon, itauOperationalLedger: { status: "NOT_PROVIDED" }, centLevelScenarios: { status: "NO_CENT_LEVEL_AMBIGUITY" }, vaExpenseMatching: vaExpenseMatchingMultiple });
+    const needsEvidenceEntry = manifestMultiple.find((m) => m.model.includes("Expense (conta restrita)") && m.operation === "NEEDS_EVIDENCE");
+    check("[múltiplos candidatos] MULTIPLE_NEAR_AMOUNT_CANDIDATES continua BLOCKED — não sabemos QUAL row corrigir, política não resolve isso", needsEvidenceEntry?.status === "BLOCKED");
+  } finally {
+    await prisma.expense.deleteMany({ where: { description: { contains: MARK } } });
+    await prisma.account.deleteMany({ where: { slug: vaAccount.slug } });
+  }
+}
+
+// ============================================================================
+// Fase 5.1A (correção pedida pelo usuário) — uma CardBill DEFER_UNKNOWN que
+// contamina o engine (contaminationRisk=true) NUNCA pode ficar como "DEFER"
+// simples — precisa virar BLOCKED explícito, já que uma DEFER esconderia o
+// bloqueio real por trás de uma pendência "aguardando informação".
+// ============================================================================
+{
+  const cardRecon = {
+    cardBillManifestById: [
+      { id: "cb-contaminating", cycleMonth: "2026-01", current: { totalAmount: "999.00", paidAmount: null, status: "closed", remainingAmount: "999.00" }, canonical: { status: "UNKNOWN" }, proposedAction: "DEFER_UNKNOWN", reason: "teste", contaminationRisk: true },
+      { id: "cb-harmless-unknown", cycleMonth: "2099-01", current: { totalAmount: "0.00", paidAmount: null, status: "open", remainingAmount: "0.00" }, canonical: { status: "UNKNOWN" }, proposedAction: "DEFER_UNKNOWN", reason: "teste", contaminationRisk: false },
+    ],
+  };
+  const input = { asOf: "2026-01-20", checkingAccount: { movementsAfterCheckpointA: [] }, confirmedCommitments: [], contingencies: [] };
+  const manifest = await buildFullApplyManifest(input, { cardRecon, itauOperationalLedger: { status: "NOT_PROVIDED" }, centLevelScenarios: { status: "NO_CENT_LEVEL_AMBIGUITY" } });
+  const contaminating = manifest.find((m) => m.existingRecordId === "cb-contaminating");
+  const harmless = manifest.find((m) => m.existingRecordId === "cb-harmless-unknown");
+  check("[CardBill contaminante] DEFER_UNKNOWN com contaminationRisk=true vira BLOCKED, nunca DEFER simples", contaminating?.status === "BLOCKED");
+  check("[CardBill inofensiva] DEFER_UNKNOWN sem risco de contaminação continua DEFER normal", harmless?.status === "DEFER");
+}
+
+// ============================================================================
+// Fase 5.1A (correção pedida pelo usuário) — simulateApprovedOnlyPersistedState:
+// prova por EXECUÇÃO REAL (resolveCurrentRelevantCardBillCycleMonth/
+// classifyCardBill/computeAccountBalance de verdade) se uma CardBill deixada
+// BLOCKED contamina o card state simulado, comparando contra o alvo canônico.
+// Fixture fictícia própria, sempre limpa.
+// ============================================================================
+{
+  const suffix = Date.now() + 2;
+  const account = await prisma.account.create({ data: { slug: `teste-fase51a-simstate-acc-${suffix}`, name: `[${MARK}] Conta simulação`, type: "checking" } });
+  const card = await prisma.card.create({ data: { slug: `teste-fase51a-simstate-card-${suffix}`, name: `[${MARK}] Cartão simulação`, totalLimit: 5000, dueDay: 11, closingDay: 4, accountId: account.id } });
+  // Ciclo antigo "contaminante": closesAt bem anterior, remaining > 0, nunca corrigido pelo manifesto (fica de fora do UPDATE).
+  const oldBill = await prisma.cardBill.create({ data: { cardId: card.id, cycleMonth: "2025-12", closesAt: new Date("2026-01-01T00:00:00.000Z"), dueAt: new Date("2026-01-11T00:00:00.000Z"), totalAmount: money(500), status: "closed" } });
+  // Ciclo canônico correto (o que DEVERIA ser o incurred): closesAt mais recente, valor a ser corrigido pelo manifesto aprovado.
+  const targetBill = await prisma.cardBill.create({ data: { cardId: card.id, cycleMonth: "2026-01", closesAt: new Date("2026-02-01T00:00:00.000Z"), dueAt: new Date("2026-02-11T00:00:00.000Z"), totalAmount: money(50), status: "open" } });
+
+  try {
+    const input = { asOf: "2026-01-20", card: { bills: [{ cycleMonth: "2026-01", amount: 300, status: "UNPAID" }] } };
+    const fullManifest = [
+      { status: "APPROVED_CANDIDATE", model: "CardBill", operation: "UPDATE", existingRecordId: targetBill.id, after: { totalAmount: "300.00", paidAmount: "0.00" }, _accountEffects: [] },
+    ];
+    const result = await simulateApprovedOnlyPersistedState(fullManifest, { input, cardRow: card, itauAccount: null, vaAccount: null, now: new Date("2026-01-20T12:00:00.000Z") });
+    check("[simulação real] a bill antiga NÃO corrigida (fora do apply) é eleita currentRelevant em vez da canônica — contaminação confirmada por execução real", result.card.currentRelevantCycleMonth_afterApprovedOnlyApply === "2025-12");
+    check("[simulação real] diverge do alvo canônico (2026-01) exatamente por causa da bill antiga não tratada", result.card.divergesFromCanonicalTarget === true && result.card.divergenceCausedBy[0]?.cycleMonth === "2025-12");
+    check("[simulação real] incurredLiability_canonicalTarget aponta pro ciclo correto (2026-01, 300.00)", result.card.incurredLiability_canonicalTarget?.cycleMonth === "2026-01" && eq(result.card.incurredLiability_canonicalTarget?.amount, 300));
+  } finally {
+    await prisma.cardBill.deleteMany({ where: { cardId: card.id } });
+    await prisma.card.delete({ where: { id: card.id } }).catch(() => {});
+    await prisma.account.delete({ where: { id: account.id } }).catch(() => {});
+  }
 }
 
 console.log(`\n${passed}/${results.length} teste(s) passaram.`);

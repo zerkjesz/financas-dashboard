@@ -27,8 +27,9 @@ import { prisma } from "../lib/prisma.js";
 import { money, addMoney, subtractMoney, multiplyMoney, divideMoney, sumMoney, compareMoney, isPositive, isNegative, ZERO } from "../lib/money.js";
 import { computeAccountBalance } from "../lib/accounts.js";
 import { getCardBillClosesAt, getCardBillDueDate } from "../lib/cardCycle.js";
+import { listCardBillsView } from "../lib/cardBillCalculator.js";
 import { classifyCardBill, classifyConfirmedCommitment, classifyContingency, OBLIGATION_CLASS } from "../lib/obligationClassifier.js";
-import { computeFreeMoneyFromBreakdown, computeSafeToSpend, isWithinNextIncomeCommitmentWindow } from "../lib/freeMoney.js";
+import { computeFreeMoneyFromBreakdown, computeSafeToSpend, isWithinNextIncomeCommitmentWindow, resolveCurrentRelevantCardBillCycleMonth } from "../lib/freeMoney.js";
 import { resolveNextExpectedIncome, resolveNextExpectedIncomeFromDb } from "../lib/incomeHorizon.js";
 import { minProjectedCashBefore } from "../lib/financialProjection.js";
 import { computeFinancialStatus } from "../lib/financialStatus.js";
@@ -411,6 +412,7 @@ function reconcileItauOperationalLedger(operationalHistoryEvidence, { checkpoint
     status: "PROVIDED",
     operationalHistoryStart: operationalHistoryStart?.toISOString?.() ?? operationalHistoryStart,
     checkpointA: money(checkpointA).toString(),
+    movementCount: movements.length,
     movements: movements.map((m) => ({ amount: m.amountMoney.toString(), description: m.description, semanticHint: m.semanticHint, note: m.note ?? null, settlesPlan: m.settlesPlan ?? null, settlesPlans: m.settlesPlans ?? null, settlesCardBillCycleMonth: m.settlesCardBillCycleMonth ?? null })),
     netOperationalMovements: netOperationalMovements.toString(),
     semanticBreakdown: Object.fromEntries(Object.entries(semanticBreakdown).map(([k, v]) => [k, v.toString()])),
@@ -2231,7 +2233,7 @@ function buildPotentialLastResortMutations(checkingRecon, vaRecon) {
 // terceiros —, então dedup por valor sozinho seria falso-positivo; dedup
 // exige valor + data + proximidade de descrição).
 // ============================================================================
-async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger, centLevelScenarios } = {}) {
+async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger, centLevelScenarios, vaExpenseMatching } = {}) {
   const entries = [];
   let seq = 0;
   const push = (e) => {
@@ -2302,7 +2304,15 @@ async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger,
       dependency: [seqClosingDay],
       idempotencyCheck: `CardBill.findUnique({ where: { id: '${cb.id}' } })` + (cb.proposedAction === "UPDATE" ? ` já tem totalAmount=${cb.canonical.totalAmount} && status='${cb.canonical.status}'` : ""),
       rollbackStrategy: cb.proposedAction === "UPDATE" ? `UPDATE de volta para totalAmount=${cb.current.totalAmount}, paidAmount=${cb.current.paidAmount}, status='${cb.current.status}'` : cb.proposedAction === "DELETE_ARTIFACT_CANDIDATE" ? "Recriar a row com os mesmos valores (id novo — CUIDADO: perde o id original; preferir soft-verificação antes de deletar de fato)" : "N/A",
-      status: statusMap[cb.proposedAction] ?? "DEFER",
+      // Achado desta rodada: DEFER_UNKNOWN com wouldContaminateEngineIfLeftAsIs
+      // NUNCA pode ficar como "DEFER" simples — verificado por execução real de
+      // resolveCurrentRelevantCardBillCycleMonth que, se esta row ficar como
+      // está, ELA (não a bill canônica correta) é eleita como INCURRED_LIABILITY
+      // por ter closesAt mais cedo. Isso é um BLOCKER de verdade, não uma
+      // pendência que só aguarda uma data futura — precisa de decisão explícita
+      // (UPDATE/SETTLE/DELETE_ARTIFACT) antes de qualquer declaração de "card
+      // state reconciliado". Ver Z7 pra prova por execução real.
+      status: cb.proposedAction === "DEFER_UNKNOWN" && cb.contaminationRisk ? "BLOCKED" : (statusMap[cb.proposedAction] ?? "DEFER"),
     });
   }
 
@@ -2359,6 +2369,7 @@ async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger,
       idempotencyCheck: existing ? `Income.findUnique({ where: { id: '${existing.id}' } }).accountId === '${itauAccount?.id}'` : "N/A",
       rollbackStrategy: existing ? `UPDATE Income.accountId de volta para '${vaAccount?.id}'` : "N/A",
       status: existing ? "APPROVED_CANDIDATE" : "BLOCKED",
+      _accountEffects: existing ? [{ accountId: vaAccount?.id, delta: subtractMoney(ZERO, money(r.amount)).toString() }, { accountId: itauAccount?.id, delta: money(r.amount).toString() }] : [],
     });
   }
 
@@ -2398,6 +2409,7 @@ async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger,
         idempotencyCheck: dedupNote,
         rollbackStrategy: "DELETE do Income criado (por id retornado no momento da criação)",
         status: dup ? "BLOCKED" : "APPROVED_CANDIDATE",
+        _accountEffects: dup ? [] : [{ accountId: itauAccount?.id, delta: money(m.amount).toString() }],
       });
     } else if (m.type === "TRANSFER_OUT_EXTERNAL") {
       push({
@@ -2416,6 +2428,7 @@ async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger,
         idempotencyCheck: dedupNote,
         rollbackStrategy: "DELETE do Transfer criado (por id retornado no momento da criação)",
         status: dup ? "BLOCKED" : "APPROVED_CANDIDATE",
+        _accountEffects: dup ? [] : [{ accountId: itauAccount?.id, delta: subtractMoney(ZERO, money(m.amount)).toString() }],
       });
     } else if (m.economicClassification === "EXPENSE" && m.economicClassificationConfidence === "CONFIRMED") {
       push({
@@ -2434,6 +2447,7 @@ async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger,
         idempotencyCheck: dedupNote,
         rollbackStrategy: "DELETE do Expense criado (por id retornado no momento da criação)",
         status: dup ? "BLOCKED" : "APPROVED_CANDIDATE",
+        _accountEffects: dup ? [] : [{ accountId: itauAccount?.id, delta: subtractMoney(ZERO, money(m.amount)).toString() }],
       });
     }
   }
@@ -2513,6 +2527,14 @@ async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger,
   }
 
   // --- Itens 2-3 (VA opening anchor) e 6-9 (Itaú opening) e checkpoint delta ---
+  // Nota de política: TODA ambiguidade que aparece em centLevelScenarios.ambiguities
+  // é, por construção (ver buildCentLevelScenarios), de candidato ÚNICO
+  // (matchType=NEAR_AMOUNT) — a política "canônico vence por padrão" (aplicada
+  // acima na correspondente UPDATE de Expense) já resolve qual valor usar.
+  // Isso NUNCA vira BLOCKED por causa da ambiguidade em si (só um
+  // MULTIPLE_*_CANDIDATES, que é um caso DIFERENTE, tratado à parte acima,
+  // continuaria bloqueado). A âncora de abertura em si, porém, segue SEMPRE
+  // DEFER (nunca auto-aprovada) — mesmo tratamento dado à âncora do Itaú.
   const centAmb = centLevelScenarios?.ambiguities?.[0] ?? null;
   push({
     operation: "OPENING_ANCHOR_CANDIDATE",
@@ -2521,19 +2543,19 @@ async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger,
     naturalKey: "VA_OPENING_ANCHOR",
     before: "sem âncora explícita",
     after: centAmb
-      ? `BLOQUEADO até o usuário resolver a ambiguidade de ${centAmb.item.delta} (${centAmb.item.counterparty}, ${centAmb.item.date}) — ver M2/Cenário A (${centAmb.scenarioA_canonicalIsCorrect.derivedOpeningBalanceVA}) vs Cenário B (${centAmb.scenarioB_devIsCorrect.derivedOpeningBalanceVA})`
+      ? `SE aprovado no futuro: BalanceAdjustment{ accountId:'${vaAccount?.id ?? "<va>"}', newBalance: ${centAmb.scenarioA_canonicalIsCorrect.derivedOpeningBalanceVA}, confidence: DERIVED_ONLY } — valor resolvido via Cenário A (canônico confirmado); Cenário B (${centAmb.scenarioB_devIsCorrect.derivedOpeningBalanceVA}) preservado só como histórico em M2, não é mais candidato de apply.`
       : "sem ambiguidade near-amount pendente nesta rodada — ver M2",
     amountEffectOnAccount: null,
     amountEffectOnLiability: null,
     source: "derivado da equação canônica (seção L) — ver M2 pros dois cenários",
-    confidence: centLevelScenarios?.status ?? "N/A",
+    confidence: "DERIVED_ONLY — nunca confundir com saldo comprovado por extrato",
     reason: centAmb
-      ? `Nunca decidir silenciosamente entre ${centAmb.item.canonicalAmount} (canônico) e ${centAmb.item.persistedDevAmount} (persistido) — ver buildCentLevelScenarios.`
+      ? `Ambiguidade de ${centAmb.item.delta} (${centAmb.item.counterparty}, ${centAmb.item.date}) resolvida pela política 'canônico vence' (candidato único, ver UPDATE de Expense correspondente acima) — mas a âncora de abertura em si segue não executada automaticamente nesta fase, como qualquer opening anchor.`
       : "Sem ambiguidade centavo-a-centavo identificada nesta rodada.",
     dependency: [seqPreflight],
     idempotencyCheck: "N/A",
     rollbackStrategy: "N/A",
-    status: centAmb ? "BLOCKED" : "DEFER",
+    status: "DEFER",
   });
   push({
     operation: "OPENING_ANCHOR_CANDIDATE",
@@ -2541,10 +2563,10 @@ async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger,
     existingRecordId: null,
     naturalKey: "ITAU_OPERATIONAL_OPENING_ANCHOR",
     before: "sem âncora operacional explícita pro cutoff 24/08",
-    after: `SE aprovado no futuro: BalanceAdjustment{ accountId:'${itauAccount?.id ?? "<itau>"}', newBalance: ${itauOperationalLedger?.derivedOpeningBalanceItau ?? "?"}, occurredAt: 2026-08-24, confidence: DERIVED_ONLY }`,
+    after: `SE aprovado no futuro: BalanceAdjustment{ accountId:'${itauAccount?.id ?? "<itau>"}', newBalance: ${itauOperationalLedger?.derivedOpeningBalanceItau ?? "?"}, occurredAt: ${itauOperationalLedger?.operationalHistoryStart ?? "<operationalHistoryStart>"}, confidence: DERIVED_ONLY }`,
     amountEffectOnAccount: null,
     amountEffectOnLiability: null,
-    source: "reconcileItauOperationalLedger — 28 movimentos candidatos, ver N2",
+    source: `reconcileItauOperationalLedger — ${itauOperationalLedger?.movementCount ?? "?"} movimentos candidatos, ver N2`,
     confidence: "DERIVED_ONLY — nunca confundir com saldo comprovado por extrato",
     reason: `derivedOpeningBalanceItau = checkpointA (${itauOperationalLedger?.checkpointA ?? "?"}) - netOperationalMovements (${itauOperationalLedger?.netOperationalMovements ?? "?"}) = ${itauOperationalLedger?.derivedOpeningBalanceItau ?? "?"}. Gap vs saldo evidenciado em 20/08 = ${itauOperationalLedger?.gapVsEvidenced20Aug ?? "?"} — NÃO preenchido com movimentos inventados entre 21-23/08.`,
     dependency: [seqPreflight],
@@ -2636,8 +2658,82 @@ async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger,
     }
   }
 
-  // --- VA: expenses canônicas já casadas — reshape do expenseMatching (excluindo o item NEAR_AMOUNT, já tratado acima como VA_OPENING_ANCHOR/M2) ---
-  // (nota: o dedup exato de cada Expense já foi feito por matchCanonicalExpenses; aqui só reshapeamos pro formato estrito)
+  // --- VA: expenses canônicas — reshape do expenseMatching pro formato
+  // estrito. Política (genérica, não específica de nenhum item): a lista
+  // CANÔNICA (evidência conversacional anterior do usuário) é a fonte de
+  // verdade por padrão — MISSING_IN_DEV vira CREATE; um NEAR_AMOUNT com
+  // candidato ÚNICO (a única forma de ambiguidade que buildCentLevelScenarios
+  // cobre, por construção) vira UPDATE (persistido -> canônico), desde que
+  // não exista evidência competindo a favor do valor persistido — os DOIS
+  // cenários seguem visíveis em M2/centLevelScenarios como histórico, nunca
+  // aplicados silenciosamente. MULTIPLE_*_CANDIDATES (não sabemos QUAL row)
+  // continua BLOCKED — isso não é resolvido por política, exige evidência
+  // adicional pra saber qual row específica corrigir.
+  for (const m of vaExpenseMatching?.matches || []) {
+    if (m.classification === "ALREADY_PERSISTED") continue; // sem mutação a listar
+    const canonicalSource = (input.restrictedAccount?.canonicalExpenses || []).find((c) => c.date === m.date && c.counterparty === m.counterparty && compareMoney(money(c.amount), money(m.amount)) === 0);
+    if (m.classification === "MISSING_IN_DEV") {
+      push({
+        operation: "CREATE",
+        model: "Expense (conta restrita)",
+        existingRecordId: null,
+        naturalKey: `accountId=${vaAccount?.id ?? "?"}, date=${m.date}, counterparty="${m.counterparty}", amount=${m.amount}`,
+        before: "N/A — ausente no dev dentro da janela pesquisada (desde a recarga)",
+        after: { accountId: vaAccount?.id ?? "<va>", amount: m.amount, occurredAt: m.date, description: m.counterparty, category: "Alimentação (revisar taxonomia existente antes de escolher)" },
+        amountEffectOnAccount: `VA: -${m.amount}`,
+        amountEffectOnLiability: null,
+        source: canonicalSource?.confidence ?? "N/A",
+        confidence: canonicalSource?.confidence ?? "N/A",
+        reason: "Presente na lista canônica (evidência conversacional anterior do usuário), ausente no dev — data e valor exatos já confirmados pelo próprio item canônico, nenhuma data inventada.",
+        dependency: [seqPreflight],
+        idempotencyCheck: `nenhuma Expense com accountId='${vaAccount?.id}', amount=${m.amount}, occurredAt no mesmo dia de '${m.date}' — dedup já feito por matchCanonicalExpenses contra TODA a janela desde a recarga.`,
+        rollbackStrategy: "DELETE do Expense criado (por id retornado no momento da criação)",
+        status: "APPROVED_CANDIDATE",
+        _accountEffects: [{ accountId: vaAccount?.id, delta: subtractMoney(ZERO, money(m.amount)).toString() }],
+      });
+    } else if (m.classification === "AMBIGUOUS_MATCH" && m.matchType === "NEAR_AMOUNT") {
+      const amb = centLevelScenarios?.ambiguities?.find((a) => a.item.date === m.date && a.item.counterparty === m.counterparty);
+      push({
+        operation: "UPDATE",
+        model: "Expense (conta restrita)",
+        existingRecordId: m.matchedDevExpenseId,
+        naturalKey: `id=${m.matchedDevExpenseId}`,
+        before: { amount: m.matchedDevAmount },
+        after: { amount: m.amount },
+        amountEffectOnAccount: `VA: correção de ${m.matchedDevAmount} -> ${m.amount} (delta de ${m.delta} revertido, sem novo movimento de caixa)`,
+        amountEffectOnLiability: null,
+        source: canonicalSource?.confidence ?? "N/A",
+        confidence: canonicalSource?.confidence ?? "N/A",
+        reason: amb
+          ? `Único candidato remanescente no dev pra este valor dentro da janela pesquisada — nenhuma outra evidência aponta a favor do valor persistido (${amb.item.persistedDevAmount}). A lista canônica é a fonte de verdade por padrão (mesmo princípio já aplicado a MISSING_IN_DEV). Cenário A (canônico correto, ${amb.scenarioA_canonicalIsCorrect.derivedOpeningBalanceVA}) e Cenário B (persistido correto, ${amb.scenarioB_devIsCorrect.derivedOpeningBalanceVA}) seguem documentados em M2 — Cenário B preservado só como histórico, NÃO é mais candidato de apply.`
+          : "Único candidato remanescente no dev pra este valor — lista canônica é a fonte de verdade por padrão.",
+        dependency: [seqPreflight],
+        idempotencyCheck: `Expense.findUnique({ where: { id: '${m.matchedDevExpenseId}' } }).amount === ${m.amount}`,
+        rollbackStrategy: `UPDATE Expense.amount de volta para ${m.matchedDevAmount} (id=${m.matchedDevExpenseId})`,
+        status: "APPROVED_CANDIDATE",
+        _accountEffects: [{ accountId: vaAccount?.id, delta: subtractMoney(money(m.matchedDevAmount), money(m.amount)).toString() }],
+      });
+    } else if (m.classification === "AMBIGUOUS_MATCH") {
+      push({
+        operation: "NEEDS_EVIDENCE",
+        model: "Expense (conta restrita)",
+        existingRecordId: null,
+        naturalKey: `date=${m.date}, counterparty="${m.counterparty}", amount=${m.amount}`,
+        before: `múltiplos candidatos no dev: ${(m.candidateDevExpenseIds || []).join(", ")}`,
+        after: "N/A — não sabemos QUAL row corrigir sem evidência adicional",
+        amountEffectOnAccount: null,
+        amountEffectOnLiability: null,
+        source: canonicalSource?.confidence ?? "N/A",
+        confidence: "UNCERTAIN",
+        reason: `Match ${m.matchType} — múltiplos candidatos, diferente do caso de candidato único (que a política de 'canônico vence' já resolve). Escolher um dos ${(m.candidateDevExpenseIds || []).length} arbitrariamente seria inventar qual é o certo.`,
+        dependency: [seqPreflight],
+        idempotencyCheck: "N/A",
+        rollbackStrategy: "N/A",
+        status: "BLOCKED",
+      });
+    }
+  }
+
   return entries;
 }
 
@@ -2748,6 +2844,91 @@ function simulatePostApplyState(fullManifest, { input, cardRecon, itauOperationa
     },
     freeMoneyNote: "Recalcular freeMoney/safeToSpend/financialStatus reais requer os saldos de conta computados acima — como ambos (Itaú e VA) permanecem INDETERMINATE até os bloqueadores serem resolvidos pelo usuário, engineDryRun (seção W) já documenta a versão COM as estimativas atuais; este bloco não duplica esse cálculo, só isola o que MUDARIA se e somente se os itens BLOCKED/DEFER fossem resolvidos.",
     remainingBlockers: blocked.map((m) => ({ naturalKey: m.naturalKey, status: m.status, model: m.model })),
+  };
+}
+
+// ============================================================================
+// Correção pedida pelo usuário nesta rodada — a simulação anterior
+// (simulatePostApplyState) partia do CANONICAL SNAPSHOT, não do estado
+// PERSISTIDO real. Esta função monta uma cópia EM MEMÓRIA do estado
+// persistido ATUAL (lido do banco, read-only) + aplica só os deltas dos
+// itens APPROVED_CANDIDATE (via _accountEffects, nunca por string-parsing) +
+// roda as MESMAS funções reais de classificação (resolveCurrentRelevantCardBillCycleMonth,
+// classifyCardBill — importadas de lib/freeMoney.js e lib/obligationClassifier.js,
+// não reimplementadas aqui) — nunca escreve no banco.
+// ============================================================================
+async function simulateApprovedOnlyPersistedState(fullManifest, { input, cardRow, itauAccount, vaAccount, now = new Date() }) {
+  const approved = fullManifest.filter((m) => m.status === "APPROVED_CANDIDATE");
+
+  const accountDelta = new Map();
+  for (const m of approved) {
+    for (const eff of m._accountEffects || []) {
+      if (!eff.accountId) continue;
+      accountDelta.set(eff.accountId, addMoney(accountDelta.get(eff.accountId) ?? ZERO, money(eff.delta)));
+    }
+  }
+
+  let itau = null;
+  let va = null;
+  if (itauAccount) {
+    const currentReal = await computeAccountBalance(itauAccount.id);
+    const delta = accountDelta.get(itauAccount.id) ?? ZERO;
+    itau = { currentReal: currentReal.toString(), delta: delta.toString(), simulatedAfterApprovedOnly: addMoney(currentReal, delta).toString() };
+  }
+  if (vaAccount) {
+    const currentReal = await computeAccountBalance(vaAccount.id);
+    const delta = accountDelta.get(vaAccount.id) ?? ZERO;
+    va = { currentReal: currentReal.toString(), delta: delta.toString(), simulatedAfterApprovedOnly: addMoney(currentReal, delta).toString() };
+  }
+
+  let cardSimulation = null;
+  if (cardRow) {
+    const realBills = await listCardBillsView(cardRow.id, { now });
+    const cardBillUpdates = new Map(
+      approved.filter((m) => m.model === "CardBill" && m.operation === "UPDATE").map((m) => [m.existingRecordId, m.after])
+    );
+    const simulatedBills = realBills.map((b) => {
+      const upd = cardBillUpdates.get(b.id);
+      return upd ? { ...b, totalAmount: money(upd.totalAmount), paidAmount: money(upd.paidAmount) } : b;
+    });
+    const currentRelevantBefore = resolveCurrentRelevantCardBillCycleMonth(realBills);
+    const currentRelevantAfterApprovedOnly = resolveCurrentRelevantCardBillCycleMonth(simulatedBills);
+
+    let incurred = null;
+    const future = [];
+    for (const b of simulatedBills) {
+      const remaining = subtractMoney(money(b.totalAmount), money(b.paidAmount ?? 0));
+      if (remaining.lte(0)) continue;
+      const cls = classifyCardBill(b, { isCurrentRelevant: b.cycleMonth === currentRelevantAfterApprovedOnly });
+      if (cls === OBLIGATION_CLASS.INCURRED_LIABILITY) incurred = { cycleMonth: b.cycleMonth, amount: remaining.toString() };
+      else if (cls === OBLIGATION_CLASS.FUTURE_OBLIGATION) future.push({ cycleMonth: b.cycleMonth, amount: remaining.toString() });
+    }
+
+    const canonicalUnpaidSorted = (input.card?.bills || []).filter((b) => b.status !== "PAID").sort((a, b) => a.cycleMonth.localeCompare(b.cycleMonth));
+    const canonicalIncurred = canonicalUnpaidSorted[0] ?? null;
+    const canonicalFuture = canonicalUnpaidSorted.slice(1);
+
+    const contaminationConfirmed = canonicalIncurred != null && incurred?.cycleMonth !== canonicalIncurred.cycleMonth;
+
+    cardSimulation = {
+      currentRelevantCycleMonth_beforeAnyApply: currentRelevantBefore,
+      currentRelevantCycleMonth_afterApprovedOnlyApply: currentRelevantAfterApprovedOnly,
+      incurredLiability_simulated: incurred,
+      futureObligations_simulated: { total: sumMoney(future.map((f) => money(f.amount))).toString(), items: future },
+      incurredLiability_canonicalTarget: canonicalIncurred ? { cycleMonth: canonicalIncurred.cycleMonth, amount: money(canonicalIncurred.amount).toString() } : null,
+      futureObligations_canonicalTarget: { total: sumMoney(canonicalFuture.map((b) => money(b.amount))).toString(), items: canonicalFuture.map((b) => ({ cycleMonth: b.cycleMonth, amount: money(b.amount).toString() })) },
+      divergesFromCanonicalTarget: contaminationConfirmed,
+      divergenceCausedBy: contaminationConfirmed
+        ? [{ cycleMonth: incurred?.cycleMonth, reason: "Esta CardBill continua sem correção aprovada (status BLOCKED/DEFER) e seu closesAt é anterior ao da bill canônica esperada, então resolveCurrentRelevantCardBillCycleMonth (execução real) a elege como INCURRED_LIABILITY em vez da bill correta." }]
+        : [],
+    };
+  }
+
+  return {
+    method: "Lê o saldo REAL atual via computeAccountBalance (real) + soma os deltas dos itens APPROVED_CANDIDATE (via _accountEffects estruturado, nunca parsing de texto) + roda listCardBillsView/resolveCurrentRelevantCardBillCycleMonth/classifyCardBill REAIS sobre uma cópia em memória — nunca escreve no banco.",
+    itau,
+    va,
+    card: cardSimulation,
   };
 }
 
@@ -2874,11 +3055,20 @@ async function main() {
   const potentialLastResortMutations = buildPotentialLastResortMutations(checkingRecon, vaRecon);
   const blockers = collectBlockers({ input, checkingRecon, vaRecon, engineResult, cardRecon, schemaAudit });
 
-  const fullApplyManifest = await buildFullApplyManifest(input, { cardRecon, itauOperationalLedger, centLevelScenarios });
+  const fullApplyManifest = await buildFullApplyManifest(input, { cardRecon, itauOperationalLedger, centLevelScenarios, vaExpenseMatching: vaRecon?.canonicalLedger?.expenseMatching });
   const mutationOrdering = buildMutationOrdering();
   const atomicityStrategy = buildAtomicityStrategy();
   const preflightAssertions = buildPreflightAssertions();
   const postApplySimulation = simulatePostApplyState(fullApplyManifest, { input, cardRecon, itauOperationalLedger, centLevelScenarios });
+  const itauAccountForSimulation = input.checkingAccount?.slug ? await prisma.account.findUnique({ where: { slug: input.checkingAccount.slug } }) : null;
+  const vaAccountForSimulation = input.restrictedAccount?.slug ? await prisma.account.findUnique({ where: { slug: input.restrictedAccount.slug } }) : null;
+  const cardRowForSimulation = input.card?.slug ? await prisma.card.findUnique({ where: { slug: input.card.slug } }) : null;
+  const approvedOnlyPersistedSimulation = await simulateApprovedOnlyPersistedState(fullApplyManifest, {
+    input,
+    cardRow: cardRowForSimulation,
+    itauAccount: itauAccountForSimulation,
+    vaAccount: vaAccountForSimulation,
+  });
 
   const report = {
     meta: { generatedAt: new Date().toISOString(), asOf: input.asOf, tool: "scripts/snapshot-dry-run.mjs", writesToDb: false },
@@ -2965,6 +3155,7 @@ async function main() {
     Z4_atomicityStrategy: atomicityStrategy,
     Z5_preflightAssertionsForFase51B: preflightAssertions,
     Z6_postApplySimulation_APPROVED_CANDIDATE_ONLY: postApplySimulation,
+    Z7_approvedOnlyPersistedStateSimulation_REAL_EXECUTION: approvedOnlyPersistedSimulation,
   };
 
   console.log(JSON.stringify(report, null, 2));
@@ -3010,4 +3201,5 @@ export {
   buildAtomicityStrategy,
   buildPreflightAssertions,
   simulatePostApplyState,
+  simulateApprovedOnlyPersistedState,
 };
