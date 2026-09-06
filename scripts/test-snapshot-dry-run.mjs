@@ -35,6 +35,9 @@ import {
   buildCardBillManifestById,
   buildFullApplyManifest,
   simulateApprovedOnlyPersistedState,
+  investigateLegacyCardBillArtifact,
+  simulateWithAndWithoutOpeningAnchors,
+  buildItauCoherenceBreakdown,
   buildMutationOrdering,
   buildAtomicityStrategy,
   buildPreflightAssertions,
@@ -1185,6 +1188,104 @@ console.log("--- Fase 5.0.1: testes sintéticos do snapshot-dry-run ---\n");
     await prisma.card.delete({ where: { id: card.id } }).catch(() => {});
     await prisma.account.delete({ where: { id: account.id } }).catch(() => {});
   }
+}
+
+// ============================================================================
+// Fase 5.1A (final blocker closure) — investigateLegacyCardBillArtifact:
+// PROVA por execução real (computeExpectedCardBillTotal de produção) se uma
+// CardBill legada é duplicata da mesma obrigação sob outra convenção de
+// cycleMonth, nunca por proximidade de valor. Fixture fictícia própria.
+// ============================================================================
+{
+  const suffix = Date.now() + 3;
+  const account = await prisma.account.create({ data: { slug: `teste-fase51a-legacy-acc-${suffix}`, name: `[${MARK}] Conta legacy fictícia`, type: "checking" } });
+  const card = await prisma.card.create({ data: { slug: `teste-fase51a-legacy-card-${suffix}`, name: `[${MARK}] Cartão legacy fictício`, totalLimit: 3000, dueDay: 11, closingDay: null, accountId: account.id } });
+  // 2 Expenses fictícias dentro do mês calendário de 2026-03 (janela legada), cardId setado.
+  await prisma.expense.create({ data: { amount: money(100), description: `[${MARK}] gasto legado fictício A`, accountId: account.id, cardId: card.id, occurredAt: new Date("2026-03-05T00:00:00.000Z") } });
+  await prisma.expense.create({ data: { amount: money(50), description: `[${MARK}] gasto legado fictício B`, accountId: account.id, cardId: card.id, occurredAt: new Date("2026-03-20T00:00:00.000Z") } });
+  const legacyBill = await prisma.cardBill.create({ data: { cardId: card.id, cycleMonth: "2026-03", closesAt: new Date("2026-04-01T00:00:00.000Z"), dueAt: new Date("2026-04-11T00:00:00.000Z"), totalAmount: money(150), status: "closed" } });
+  const wrongBill = await prisma.cardBill.create({ data: { cardId: card.id, cycleMonth: "2026-06", closesAt: new Date("2026-07-01T00:00:00.000Z"), dueAt: new Date("2026-07-11T00:00:00.000Z"), totalAmount: money(999), status: "closed" } });
+
+  try {
+    const knownBillsByMonth = new Map([["2026-04", money(140)]]); // ciclo seguinte já tem cobertura canônica conhecida (valor fictício diferente, de propósito — a classificação não depende de bater o valor exato)
+    const cbLegacy = { id: legacyBill.id, cycleMonth: "2026-03", current: { totalAmount: "150", paidAmount: null, status: "closed", remainingAmount: "150" } };
+    const investigationLegacy = await investigateLegacyCardBillArtifact(card, cbLegacy, { knownBillsByMonth });
+    check("[lineage real] valor recomputado via função de PRODUÇÃO bate com o persistido", investigationLegacy.matchesPersistedValue === true);
+    check("[lineage real] zero Transfer vinculado (nunca foi liquidada sozinha)", investigationLegacy.linkedTransfersCount === 0);
+    check("[lineage real] ciclo seguinte tem cobertura canônica conhecida -> LEGACY_SAME_ECONOMIC_BILL", investigationLegacy.classification === "LEGACY_SAME_ECONOMIC_BILL");
+    check("[lineage real] ação recomendada é DELETE_PROVEN_ARTIFACT quando comprovado", investigationLegacy.recommendedAction === "DELETE_PROVEN_ARTIFACT");
+    check("[lineage real] resíduo não-explicado é reportado, nunca escondido", investigationLegacy.unresolvedResidual?.gap === "10");
+
+    // Ciclo SEM cobertura canônica no próximo mês -> nunca decide DELETE por conta própria.
+    const knownBillsByMonthNone = new Map();
+    const cbNoCoverage = { id: wrongBill.id, cycleMonth: "2026-06", current: { totalAmount: "999", paidAmount: null, status: "closed", remainingAmount: "999" } };
+    const investigationNoCoverage = await investigateLegacyCardBillArtifact(card, cbNoCoverage, { knownBillsByMonth: knownBillsByMonthNone });
+    check("[sem cobertura do ciclo seguinte] NUNCA classifica como LEGACY_SAME_ECONOMIC_BILL sem essa evidência", investigationNoCoverage.classification !== "LEGACY_SAME_ECONOMIC_BILL");
+    check("[sem cobertura do ciclo seguinte] ação recomendada permanece DEFER_BLOCKED", investigationNoCoverage.recommendedAction === "DEFER_BLOCKED");
+
+    // --- Wiring: buildFullApplyManifest usa a investigação pra propor DELETE aprovado ---
+    const cardRecon = { cardBillManifestById: [{ id: legacyBill.id, cycleMonth: "2026-03", current: cbLegacy.current, canonical: { status: "UNKNOWN" }, proposedAction: "DEFER_UNKNOWN", reason: "teste", contaminationRisk: true }], legacyCardBillInvestigations: [investigationLegacy] };
+    const inputForManifest = { asOf: "2026-04-01", checkingAccount: { movementsAfterCheckpointA: [] }, confirmedCommitments: [], contingencies: [] };
+    const manifest = await buildFullApplyManifest(inputForManifest, { cardRecon, itauOperationalLedger: { status: "NOT_PROVIDED" }, centLevelScenarios: { status: "NO_CENT_LEVEL_AMBIGUITY" } });
+    const deleteEntry = manifest.find((m) => m.model === "CardBill" && m.existingRecordId === legacyBill.id);
+    check("[wiring] CardBill provada como duplicata legada vira DELETE, status APPROVED_CANDIDATE no manifesto final", deleteEntry?.operation === "DELETE" && deleteEntry?.status === "APPROVED_CANDIDATE");
+  } finally {
+    await prisma.expense.deleteMany({ where: { description: { contains: MARK } } });
+    await prisma.cardBill.deleteMany({ where: { cardId: card.id } });
+    await prisma.card.delete({ where: { id: card.id } }).catch(() => {});
+    await prisma.account.delete({ where: { id: account.id } }).catch(() => {});
+  }
+}
+
+// ============================================================================
+// Fase 5.1A (final blocker closure) — simulateWithAndWithoutOpeningAnchors:
+// prova que trocar o anchor NÃO é "+ o valor nominal" — é trocar a data de
+// corte. Fixture fictícia com anchor real + movimentos reais pós-anchor.
+// ============================================================================
+{
+  const suffix = Date.now() + 4;
+  const account = await prisma.account.create({ data: { slug: `teste-fase51a-anchor-acc-${suffix}`, name: `[${MARK}] Conta anchor fictícia`, type: "checking" } });
+  await prisma.balanceAdjustment.create({ data: { accountId: account.id, newBalance: money(500), occurredAt: new Date("2026-01-01T00:00:00.000Z") } });
+  await prisma.income.create({ data: { amount: money(200), description: `[${MARK}] renda pós-anchor antigo`, accountId: account.id, occurredAt: new Date("2026-01-10T00:00:00.000Z") } });
+  await prisma.expense.create({ data: { amount: money(80), description: `[${MARK}] gasto pós-cutover fictício`, accountId: account.id, occurredAt: new Date("2026-01-25T00:00:00.000Z") } });
+
+  try {
+    const fullManifest = [{ status: "APPROVED_CANDIDATE", model: "Income", operation: "CREATE", _accountEffects: [{ accountId: account.id, delta: "30" }] }];
+    const input = { checkingAccount: { slug: account.slug } };
+    const result = await simulateWithAndWithoutOpeningAnchors(fullManifest, {
+      input,
+      itauAccount: account,
+      vaAccount: null,
+      itauOperationalLedger: { derivedOpeningBalanceItau: "50", operationalHistoryStart: new Date("2026-01-20T00:00:00.000Z").toISOString() },
+      centLevelScenarios: { status: "NO_CENT_LEVEL_AMBIGUITY" },
+    });
+    // WITHOUT: 500 (anchor antigo) + 200 - 80 + 30 (approved) = 650
+    check("WITHOUT_OPENING_ANCHORS usa o anchor real existente + movimentos reais + approved deltas", eq(result.itau.WITHOUT_OPENING_ANCHORS, 650));
+    // WITH: novo anchor hipotético em 19/01 (véspera de 20/01) = 50; só o gasto de 25/01 (-80) conta (a renda de 10/01 é ANTES do novo anchor, não conta mais) + 30 approved = 0
+    check("[troca de anchor] movimentos ANTES do novo anchor deixam de contar — não é simplesmente '+ o valor do anchor'", eq(result.itau.WITH_OPENING_ANCHORS, 0));
+    check("anchorSwapNetEffect é reportado explicitamente (nunca escondido atrás do valor nominal do anchor)", result.itau.anchorSwapNetEffect != null && result.itau.anchorSwapNetEffect !== result.itau.cutoverAnchorCandidate);
+  } finally {
+    await prisma.expense.deleteMany({ where: { description: { contains: MARK } } });
+    await prisma.income.deleteMany({ where: { description: { contains: MARK } } });
+    await prisma.balanceAdjustment.deleteMany({ where: { accountId: account.id } });
+    await prisma.account.delete({ where: { id: account.id } }).catch(() => {});
+  }
+}
+
+// ============================================================================
+// Fase 5.1A (final blocker closure) — buildItauCoherenceBreakdown: pura,
+// grupos nunca se sobrepõem, delta pós-checkpoint nunca aplicado.
+// ============================================================================
+{
+  const input = {
+    checkingAccount: { movementsAfterCheckpointA: [{ description: `[${MARK}] renda teste`, amount: 40, type: "INFLOW" }, { description: `[${MARK}] gasto teste`, amount: 15, type: "OUTFLOW" }] },
+    reclassifiedIncomes: [{ description: `[${MARK}] reclass teste`, amount: 5 }],
+  };
+  const breakdown = buildItauCoherenceBreakdown(input, { itauOperationalLedger: { movementCount: 7, netOperationalMovements: "70", derivedOpeningBalanceItau: "12" } });
+  check("group_A reporta movementCount/derivedOpeningBalanceItau reais, nunca hardcoded", breakdown.group_A_operationalLedgerLot.derivedOpeningBalanceItau === "12");
+  check("group_B soma renda-gasto corretamente (40-15=25)", eq(breakdown.group_B_datedPostCheckpointMovements.netEffect, 25));
+  check("group_C reporta o efeito da reclassificação isoladamente", eq(breakdown.group_C_reclassification.netEffectOnItau, 5));
+  check("group_D (delta pós-checkpoint) nunca marcado como aplicado", breakdown.group_D_postCheckpointUnresolvedDelta.appliedAnywhere === false);
 }
 
 console.log(`\n${passed}/${results.length} teste(s) passaram.`);

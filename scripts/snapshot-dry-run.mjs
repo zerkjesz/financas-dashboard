@@ -26,8 +26,9 @@ import { fileURLToPath } from "node:url";
 import { prisma } from "../lib/prisma.js";
 import { money, addMoney, subtractMoney, multiplyMoney, divideMoney, sumMoney, compareMoney, isPositive, isNegative, ZERO } from "../lib/money.js";
 import { computeAccountBalance } from "../lib/accounts.js";
-import { getCardBillClosesAt, getCardBillDueDate } from "../lib/cardCycle.js";
-import { listCardBillsView } from "../lib/cardBillCalculator.js";
+import { getCardBillClosesAt, getCardBillDueDate, getCardBillPeriod } from "../lib/cardCycle.js";
+import { listCardBillsView, computeExpectedCardBillTotal } from "../lib/cardBillCalculator.js";
+import { addMonthKey } from "../lib/formatMoney.js";
 import { classifyCardBill, classifyConfirmedCommitment, classifyContingency, OBLIGATION_CLASS } from "../lib/obligationClassifier.js";
 import { computeFreeMoneyFromBreakdown, computeSafeToSpend, isWithinNextIncomeCommitmentWindow, resolveCurrentRelevantCardBillCycleMonth } from "../lib/freeMoney.js";
 import { resolveNextExpectedIncome, resolveNextExpectedIncomeFromDb } from "../lib/incomeHorizon.js";
@@ -1025,6 +1026,27 @@ async function reconcileCard(cardInput, csvAudit) {
     }
   }
 
+  const cardBillManifestById = buildCardBillManifestById(knownBills, classifiedBills);
+
+  // Fase 5.1A (final blocker closure) — pra TODA CardBill contaminante
+  // (contaminationRisk=true), investiga se é duplicata legada de uma
+  // obrigação já coberta canonicamente por outro ciclo, ou uma dívida real
+  // distinta — nunca decide por proximidade de valor, sempre por execução
+  // real (ver investigateLegacyCardBillArtifact).
+  const legacyCardBillInvestigations = [];
+  if (card) {
+    for (const cb of cardBillManifestById) {
+      // Só investiga rows GENUINAMENTE não resolvidas (DEFER_UNKNOWN) — uma
+      // row com proposedAction=UPDATE já tem correção aprovada no manifesto
+      // (ver buildFullApplyManifest), então contaminationRisk=true nela não
+      // significa "precisa de investigação de lineage", só "ainda não foi
+      // corrigida NESTE MOMENTO da leitura" — investigar aqui seria ruído.
+      if (cb.proposedAction === "DEFER_UNKNOWN" && cb.contaminationRisk) {
+        legacyCardBillInvestigations.push(await investigateLegacyCardBillArtifact(card, cb, { knownBillsByMonth }));
+      }
+    }
+  }
+
   const purchaseAudit = await auditPurchasesAgainstKnownBills(cardInput, knownBillsByMonth, csvAudit);
 
   // Item 8 — OBSERVED BILL TOTAL vs UNDERLYING PURCHASES EXPLAINED, por ciclo.
@@ -1065,7 +1087,8 @@ async function reconcileCard(cardInput, csvAudit) {
     cardBillUniqueConstraint: confirmCardBillUniqueConstraint(),
     persistedCardBillsInDb: persistedBills,
     persistedCardBillsClassified: classifiedBills,
-    cardBillManifestById: buildCardBillManifestById(knownBills, classifiedBills),
+    cardBillManifestById,
+    legacyCardBillInvestigations,
     purchaseAudit,
     currentCardCreditBalanceAssumption: "R$0,00 — nenhuma evidência de saldo credor atual informada neste snapshot.",
   };
@@ -1125,6 +1148,78 @@ function buildCardBillManifestById(knownBills, classifiedBills) {
       contaminationRisk: cb.wouldContaminateEngineIfLeftAsIs,
     };
   });
+}
+
+// ============================================================================
+// Fase 5.1A (final blocker closure) — investiga se uma CardBill DEFER_UNKNOWN/
+// contaminante é (A) duplicata legada da MESMA obrigação econômica hoje
+// corretamente representada por outro cycleMonth canônico, ou (B) uma dívida
+// real distinta. NUNCA decide por proximidade de valor — usa: recomputação
+// via função de PRODUÇÃO real (computeExpectedCardBillTotal, read-only), zero
+// Transfer vinculado (nunca foi ela mesma liquidada), e composição real das
+// Expense/Installment subjacentes. Genérica: funciona pra qualquer cycleMonth
+// legado, não hardcoda "2026-08".
+// ============================================================================
+async function investigateLegacyCardBillArtifact(cardRow, cb, { knownBillsByMonth } = {}) {
+  if (!cardRow || !cb) return { status: "MISSING_INPUT" };
+
+  const recomputed = await computeExpectedCardBillTotal(cardRow, cb.cycleMonth);
+  const matchesRecomputation = compareMoney(recomputed, money(cb.current.totalAmount)) === 0;
+
+  const linkedTransfersCount = await prisma.transfer.count({ where: { cardBillId: cb.id } });
+  const wasEverSettled = cb.current.paidAmount != null && isPositive(money(cb.current.paidAmount));
+
+  const { start, end } = getCardBillPeriod(cardRow, cb.cycleMonth);
+  const underlyingExpenses = await prisma.expense.findMany({ where: { cardId: cardRow.id, occurredAt: { gte: start, lt: end } }, orderBy: { occurredAt: "asc" } });
+  const underlyingInstallments = await prisma.installment.findMany({ where: { billMonth: cb.cycleMonth, purchase: { cardId: cardRow.id } } });
+
+  const nextCycleMonth = addMonthKey(cb.cycleMonth, 1);
+  const nextCycleKnownAmount = knownBillsByMonth?.get(nextCycleMonth) ?? null;
+  const overlapsWithNextCycleWindow = getCardBillClosesAt(cardRow, cb.cycleMonth) < getCardBillClosesAt(cardRow, nextCycleMonth);
+
+  const isReconstructedFromRealPersistedRows = matchesRecomputation && (underlyingExpenses.length > 0 || underlyingInstallments.length > 0);
+  const neverIndependentlySettled = linkedTransfersCount === 0 && !wasEverSettled;
+  const nextCycleHasCanonicalCoverage = nextCycleKnownAmount != null;
+
+  let classification = "UNKNOWN";
+  let recommendedAction = "DEFER_BLOCKED";
+  let justification = "Evidência insuficiente pra classificar com confiança.";
+
+  if (isReconstructedFromRealPersistedRows && neverIndependentlySettled && nextCycleHasCanonicalCoverage) {
+    classification = "LEGACY_SAME_ECONOMIC_BILL";
+    recommendedAction = "DELETE_PROVEN_ARTIFACT";
+    justification = `totalAmount=${cb.current.totalAmount} é EXATAMENTE reconstruível agora (execução real de computeExpectedCardBillTotal, não suposição) a partir de ${underlyingExpenses.length} Expense(s) + ${underlyingInstallments.length} Installment(s) reais com cardId deste cartão, dentro da janela [${start.toISOString().slice(0, 10)}, ${end.toISOString().slice(0, 10)}) — convenção antiga de mês calendário (Card.closingDay ainda null hoje). Esta row NUNCA teve Transfer/pagamento vinculado (${linkedTransfersCount} transfers, paidAmount=${cb.current.paidAmount}) — nunca foi ela mesma liquidada como obrigação própria. O ciclo seguinte (${nextCycleMonth}) JÁ tem cobertura canônica conhecida (${nextCycleKnownAmount?.toString()}) — sob a convenção atual (Card.closingDay=4, aplicada nesta mesma fase), a janela real de fechamento que produziria o vencimento de setembro passa a cair em ${nextCycleMonth}, não em ${cb.cycleMonth}. Isto é consistente com: esta row é a computação da MESMA obrigação econômica sob a convenção de rótulo ANTIGA, não uma dívida adicional real.`;
+  } else if (!matchesRecomputation) {
+    classification = "UNKNOWN";
+    recommendedAction = "DEFER_BLOCKED";
+    justification = `totalAmount persistido (${cb.current.totalAmount}) NÃO bate com a recomputação real via computeExpectedCardBillTotal (${recomputed.toString()}) — divergência não explicada, precisa de investigação adicional antes de qualquer classificação.`;
+  }
+
+  return {
+    cycleMonth: cb.cycleMonth,
+    id: cb.id,
+    recomputedViaRealProductionFunction: recomputed.toString(),
+    matchesPersistedValue: matchesRecomputation,
+    linkedTransfersCount,
+    wasEverSettled,
+    underlyingExpenses: underlyingExpenses.map((e) => ({ id: e.id, amount: e.amount.toString(), occurredAt: e.occurredAt.toISOString(), source: e.source })),
+    underlyingExpensesSum: sumMoney(underlyingExpenses.map((e) => money(e.amount))).toString(),
+    underlyingInstallments: underlyingInstallments.map((i) => ({ id: i.id, amount: i.amount.toString(), number: i.number })),
+    windowUsed: { start: start.toISOString(), end: end.toISOString(), conventionNote: "Card.closingDay ainda null nesta rodada — janela = mês calendário (convenção antiga/atual-sem-configuração, idênticas)." },
+    nextCycleMonth,
+    nextCycleKnownAmount: nextCycleKnownAmount?.toString() ?? null,
+    overlapsWithNextCycleWindow,
+    classification,
+    recommendedAction,
+    justification,
+    unresolvedResidual:
+      classification === "LEGACY_SAME_ECONOMIC_BILL" && nextCycleKnownAmount != null
+        ? {
+            gap: subtractMoney(money(cb.current.totalAmount), nextCycleKnownAmount).toString(),
+            note: "Diferença entre o total legado recomputado e o valor bancário canônico final — NÃO totalmente explicada por nenhum subconjunto identificado das Expenses subjacentes (verificado). Não bloqueia a classificação (que se apoia em ausência de liquidação própria + cobertura do ciclo seguinte, não em bater o valor exato) — mas permanece como questão aberta separada, possivelmente ligada à Purchase de parcelamento já classificada UNKNOWN_PARTIAL_EXPLANATORY_POWER.",
+          }
+        : null,
+  };
 }
 
 // ============================================================================
@@ -2234,6 +2329,7 @@ function buildPotentialLastResortMutations(checkingRecon, vaRecon) {
 // exige valor + data + proximidade de descrição).
 // ============================================================================
 async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger, centLevelScenarios, vaExpenseMatching } = {}) {
+  const legacyInvestigationById = new Map((cardRecon?.legacyCardBillInvestigations || []).map((inv) => [inv.id, inv]));
   const entries = [];
   let seq = 0;
   const push = (e) => {
@@ -2289,6 +2385,35 @@ async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger,
   for (const cb of cardRecon?.cardBillManifestById || []) {
     const statusMap = { KEEP: "APPROVED_CANDIDATE", UPDATE: "APPROVED_CANDIDATE", DELETE_ARTIFACT_CANDIDATE: "DELETE_ARTIFACT_CANDIDATE", DEFER_UNKNOWN: "DEFER" };
     if (cb.proposedAction === "KEEP") continue; // sem mutação real a listar
+
+    // Fase 5.1A (final blocker closure) — se esta row já foi investigada
+    // (investigateLegacyCardBillArtifact) e provada como duplicata legada da
+    // MESMA obrigação econômica hoje coberta canonicamente por outro ciclo,
+    // vira um DELETE aprovado (necessário pra destravar o contamination gate)
+    // — nunca por proximidade de valor, sempre pela investigação real.
+    const investigation = legacyInvestigationById.get(cb.id);
+    if (investigation?.classification === "LEGACY_SAME_ECONOMIC_BILL" && investigation.recommendedAction === "DELETE_PROVEN_ARTIFACT") {
+      push({
+        operation: "DELETE",
+        model: "CardBill",
+        existingRecordId: cb.id,
+        naturalKey: `cardId=${cardRow?.id ?? "?"}, cycleMonth=${cb.cycleMonth}`,
+        before: cb.current,
+        after: `REMOVIDO — obrigação já coberta pelo ciclo canônico ${investigation.nextCycleMonth} (id da row correspondente listado acima como UPDATE)`,
+        amountEffectOnAccount: null,
+        amountEffectOnLiability: `-${cb.current.remainingAmount} de liability FALSA removida (nunca foi uma dívida adicional real — ver investigação)`,
+        source: "investigateLegacyCardBillArtifact — recomputação real via computeExpectedCardBillTotal + lineage",
+        confidence: "PROVEN_BY_RECOMPUTATION_AND_LINEAGE",
+        reason: investigation.justification,
+        dependency: [seqClosingDay],
+        idempotencyCheck: `CardBill.findUnique({ where: { id: '${cb.id}' } }) === null`,
+        rollbackStrategy: `Recriar a row com totalAmount=${cb.current.totalAmount}, status='${cb.current.status}', cycleMonth='${cb.cycleMonth}' — NUNCA reaproveitar o id original (CardBill.id não é preservável em rollback de DELETE); nenhum Expense/Installment/Purchase subjacente é afetado (só a row agregada de CardBill é removida).`,
+        status: "APPROVED_CANDIDATE",
+        unresolvedResidualNote: investigation.unresolvedResidual?.note ?? null,
+      });
+      continue;
+    }
+
     push({
       operation: cb.proposedAction === "DELETE_ARTIFACT_CANDIDATE" ? "DELETE" : cb.proposedAction === "DEFER_UNKNOWN" ? "DEFER" : "UPDATE",
       model: "CardBill",
@@ -2311,7 +2436,9 @@ async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger,
       // por ter closesAt mais cedo. Isso é um BLOCKER de verdade, não uma
       // pendência que só aguarda uma data futura — precisa de decisão explícita
       // (UPDATE/SETTLE/DELETE_ARTIFACT) antes de qualquer declaração de "card
-      // state reconciliado". Ver Z7 pra prova por execução real.
+      // state reconciliado". Ver Z7 pra prova por execução real. Se JÁ foi
+      // investigada e não resultou em DELETE aprovado (bloco acima), continua
+      // BLOCKED — a investigação existe, mas não produziu confiança suficiente.
       status: cb.proposedAction === "DEFER_UNKNOWN" && cb.contaminationRisk ? "BLOCKED" : (statusMap[cb.proposedAction] ?? "DEFER"),
     });
   }
@@ -2535,22 +2662,31 @@ async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger,
   // MULTIPLE_*_CANDIDATES, que é um caso DIFERENTE, tratado à parte acima,
   // continuaria bloqueado). A âncora de abertura em si, porém, segue SEMPRE
   // DEFER (nunca auto-aprovada) — mesmo tratamento dado à âncora do Itaú.
+  // Item 10 — reclassificação conceitual: uma âncora de abertura de CUTOVER
+  // (marca o início do histórico operacional monitorado num cutoff definido
+  // pelo usuário, pra NÃO importar a vida financeira inteira anterior a ele)
+  // é uma categoria DIFERENTE de um ajuste de reconciliação arbitrário
+  // (RECONCILIATION_ADJUSTMENT, ver buildPotentialLastResortMutations — usado
+  // só quando um delta NÃO tem explicação nenhuma). Aqui os dois cutoffs TÊM
+  // explicação/derivação completa (ver M2/N2) — por isso "CUTOVER_OPENING_
+  // CANDIDATE", não "ajuste arbitrário". Mesmo assim, nenhum dos dois é
+  // executado sem aprovação explícita — DEFER em ambos os casos.
   const centAmb = centLevelScenarios?.ambiguities?.[0] ?? null;
   push({
-    operation: "OPENING_ANCHOR_CANDIDATE",
-    model: "BalanceAdjustment (conta restrita) — NÃO APROVADO",
+    operation: "CUTOVER_OPENING_CANDIDATE",
+    model: "BalanceAdjustment (conta restrita) — NÃO APROVADO, REQUIRES_EXPLICIT_APPROVAL",
     existingRecordId: null,
     naturalKey: "VA_OPENING_ANCHOR",
-    before: "sem âncora explícita",
+    before: "sem âncora explícita — histórico anterior ao cutoff (21/08) não importado",
     after: centAmb
-      ? `SE aprovado no futuro: BalanceAdjustment{ accountId:'${vaAccount?.id ?? "<va>"}', newBalance: ${centAmb.scenarioA_canonicalIsCorrect.derivedOpeningBalanceVA}, confidence: DERIVED_ONLY } — valor resolvido via Cenário A (canônico confirmado); Cenário B (${centAmb.scenarioB_devIsCorrect.derivedOpeningBalanceVA}) preservado só como histórico em M2, não é mais candidato de apply.`
+      ? `SE aprovado no futuro: BalanceAdjustment{ accountId:'${vaAccount?.id ?? "<va>"}', newBalance: ${centAmb.scenarioA_canonicalIsCorrect.derivedOpeningBalanceVA}, occurredAt: <véspera da recarga>, confidence: DERIVED_ONLY } — valor resolvido via Cenário A (canônico confirmado); Cenário B (${centAmb.scenarioB_devIsCorrect.derivedOpeningBalanceVA}) preservado só como histórico em M2, não é mais candidato de apply.`
       : "sem ambiguidade near-amount pendente nesta rodada — ver M2",
     amountEffectOnAccount: null,
     amountEffectOnLiability: null,
     source: "derivado da equação canônica (seção L) — ver M2 pros dois cenários",
-    confidence: "DERIVED_ONLY — nunca confundir com saldo comprovado por extrato",
+    confidence: "CUTOVER_OPENING_CANDIDATE / DERIVED_ONLY — nunca confundir com saldo comprovado por extrato, e NUNCA com RECONCILIATION_ADJUSTMENT (que é usado só quando não há explicação nenhuma pro delta — aqui há: ver M2)",
     reason: centAmb
-      ? `Ambiguidade de ${centAmb.item.delta} (${centAmb.item.counterparty}, ${centAmb.item.date}) resolvida pela política 'canônico vence' (candidato único, ver UPDATE de Expense correspondente acima) — mas a âncora de abertura em si segue não executada automaticamente nesta fase, como qualquer opening anchor.`
+      ? `Ambiguidade de ${centAmb.item.delta} (${centAmb.item.counterparty}, ${centAmb.item.date}) resolvida pela política 'canônico vence' (candidato único, ver UPDATE de Expense correspondente acima) — mas a âncora de abertura em si segue não executada automaticamente nesta fase, como qualquer cutover opening.`
       : "Sem ambiguidade centavo-a-centavo identificada nesta rodada.",
     dependency: [seqPreflight],
     idempotencyCheck: "N/A",
@@ -2558,17 +2694,17 @@ async function buildFullApplyManifest(input, { cardRecon, itauOperationalLedger,
     status: "DEFER",
   });
   push({
-    operation: "OPENING_ANCHOR_CANDIDATE",
-    model: "BalanceAdjustment (conta irrestrita) — NÃO APROVADO",
+    operation: "CUTOVER_OPENING_CANDIDATE",
+    model: "BalanceAdjustment (conta irrestrita) — NÃO APROVADO, REQUIRES_EXPLICIT_APPROVAL",
     existingRecordId: null,
     naturalKey: "ITAU_OPERATIONAL_OPENING_ANCHOR",
-    before: "sem âncora operacional explícita pro cutoff 24/08",
+    before: "sem âncora operacional explícita pro cutoff 24/08 — histórico anterior não importado",
     after: `SE aprovado no futuro: BalanceAdjustment{ accountId:'${itauAccount?.id ?? "<itau>"}', newBalance: ${itauOperationalLedger?.derivedOpeningBalanceItau ?? "?"}, occurredAt: ${itauOperationalLedger?.operationalHistoryStart ?? "<operationalHistoryStart>"}, confidence: DERIVED_ONLY }`,
     amountEffectOnAccount: null,
     amountEffectOnLiability: null,
     source: `reconcileItauOperationalLedger — ${itauOperationalLedger?.movementCount ?? "?"} movimentos candidatos, ver N2`,
-    confidence: "DERIVED_ONLY — nunca confundir com saldo comprovado por extrato",
-    reason: `derivedOpeningBalanceItau = checkpointA (${itauOperationalLedger?.checkpointA ?? "?"}) - netOperationalMovements (${itauOperationalLedger?.netOperationalMovements ?? "?"}) = ${itauOperationalLedger?.derivedOpeningBalanceItau ?? "?"}. Gap vs saldo evidenciado em 20/08 = ${itauOperationalLedger?.gapVsEvidenced20Aug ?? "?"} — NÃO preenchido com movimentos inventados entre 21-23/08.`,
+    confidence: "CUTOVER_OPENING_CANDIDATE / DERIVED_ONLY — nunca confundir com saldo comprovado por extrato, e NUNCA com RECONCILIATION_ADJUSTMENT",
+    reason: `derivedOpeningBalanceItau = checkpointA (${itauOperationalLedger?.checkpointA ?? "?"}) - netOperationalMovements (${itauOperationalLedger?.netOperationalMovements ?? "?"}) = ${itauOperationalLedger?.derivedOpeningBalanceItau ?? "?"}. Gap vs saldo evidenciado em 20/08 = ${itauOperationalLedger?.gapVsEvidenced20Aug ?? "?"} — NÃO preenchido com movimentos inventados entre 21-23/08. O delta pós-checkpoint (+0,03, entrada separada abaixo) NUNCA é absorvido aqui.`,
     dependency: [seqPreflight],
     idempotencyCheck: "N/A",
     rollbackStrategy: "N/A",
@@ -2887,10 +3023,13 @@ async function simulateApprovedOnlyPersistedState(fullManifest, { input, cardRow
     const cardBillUpdates = new Map(
       approved.filter((m) => m.model === "CardBill" && m.operation === "UPDATE").map((m) => [m.existingRecordId, m.after])
     );
-    const simulatedBills = realBills.map((b) => {
-      const upd = cardBillUpdates.get(b.id);
-      return upd ? { ...b, totalAmount: money(upd.totalAmount), paidAmount: money(upd.paidAmount) } : b;
-    });
+    const cardBillDeletes = new Set(approved.filter((m) => m.model === "CardBill" && m.operation === "DELETE").map((m) => m.existingRecordId));
+    const simulatedBills = realBills
+      .filter((b) => !cardBillDeletes.has(b.id))
+      .map((b) => {
+        const upd = cardBillUpdates.get(b.id);
+        return upd ? { ...b, totalAmount: money(upd.totalAmount), paidAmount: money(upd.paidAmount) } : b;
+      });
     const currentRelevantBefore = resolveCurrentRelevantCardBillCycleMonth(realBills);
     const currentRelevantAfterApprovedOnly = resolveCurrentRelevantCardBillCycleMonth(simulatedBills);
 
@@ -2929,6 +3068,160 @@ async function simulateApprovedOnlyPersistedState(fullManifest, { input, cardRow
     itau,
     va,
     card: cardSimulation,
+  };
+}
+
+// ============================================================================
+// Item 12/13 — replica a MESMA fórmula real de lib/accounts.js:computeAccountBalance
+// (anchor.newBalance + movimentos reais desde o anchor), mas com um anchor
+// HIPOTÉTICO (nunca escrito) — pra simular "e se este cutover opening fosse
+// aprovado". Read-only: só leituras de aggregate, nenhuma escrita. Crítico:
+// trocar o anchor NÃO é "somar o valor do anchor" — é trocar a DATA DE CORTE
+// que decide quais movimentos reais contam, então o efeito líquido pode (e
+// costuma) ser bem diferente do valor nominal do anchor.
+// ============================================================================
+async function computeAccountBalanceWithHypotheticalAnchor(accountId, { anchorDate, anchorBalance }) {
+  const [incomeSum, expenseSum, transfersOut, transfersIn] = await Promise.all([
+    prisma.income.aggregate({ where: { accountId, occurredAt: { gt: anchorDate } }, _sum: { amount: true } }),
+    prisma.expense.aggregate({ where: { accountId, occurredAt: { gt: anchorDate } }, _sum: { amount: true } }),
+    prisma.transfer.aggregate({ where: { fromAccountId: accountId, occurredAt: { gt: anchorDate } }, _sum: { amount: true } }),
+    prisma.transfer.aggregate({ where: { toAccountId: accountId, occurredAt: { gt: anchorDate } }, _sum: { amount: true } }),
+  ]);
+  let balance = money(anchorBalance);
+  balance = addMoney(balance, money(incomeSum._sum.amount));
+  balance = subtractMoney(balance, money(expenseSum._sum.amount));
+  balance = addMoney(balance, money(transfersIn._sum.amount));
+  balance = subtractMoney(balance, money(transfersOut._sum.amount));
+  return balance;
+}
+
+// ============================================================================
+// Item 12 — WITH_OPENING_ANCHORS vs WITHOUT_OPENING_ANCHORS, sobre o MESMO
+// approved-only apply set. O +0,03 pós-checkpoint aparece nos dois lados
+// (nunca absorvido). Item 13 — Itaú coherence breakdown: separa os 29
+// movimentos operacionais (0 persistidos, 0 no apply candidate — só
+// alimentam o anchor derivado) dos 3 movimentos pós-checkpoint bem-datados
+// (no apply candidate) e da reclassificação R$22, mostrando o efeito de cada
+// grupo sem contá-los duas vezes.
+// ============================================================================
+async function simulateWithAndWithoutOpeningAnchors(fullManifest, { input, itauAccount, vaAccount, itauOperationalLedger, centLevelScenarios }) {
+  const approved = fullManifest.filter((m) => m.status === "APPROVED_CANDIDATE");
+  const accountDelta = new Map();
+  for (const m of approved) {
+    for (const eff of m._accountEffects || []) {
+      if (!eff.accountId) continue;
+      accountDelta.set(eff.accountId, addMoney(accountDelta.get(eff.accountId) ?? ZERO, money(eff.delta)));
+    }
+  }
+
+  const result = { itau: null, va: null };
+
+  if (itauAccount) {
+    const currentReal = await computeAccountBalance(itauAccount.id);
+    const delta = accountDelta.get(itauAccount.id) ?? ZERO;
+    const withoutAnchors = addMoney(currentReal, delta);
+
+    const itauOpeningValue = itauOperationalLedger?.derivedOpeningBalanceItau;
+    let withAnchors = null;
+    let anchorSwapEffect = null;
+    let anchorDateUsed = null;
+    if (itauOpeningValue != null && itauOperationalLedger?.operationalHistoryStart) {
+      anchorDateUsed = new Date(new Date(itauOperationalLedger.operationalHistoryStart).getTime() - 24 * 60 * 60 * 1000);
+      const currentRealWithHypotheticalAnchor = await computeAccountBalanceWithHypotheticalAnchor(itauAccount.id, { anchorDate: anchorDateUsed, anchorBalance: itauOpeningValue });
+      anchorSwapEffect = subtractMoney(currentRealWithHypotheticalAnchor, currentReal);
+      withAnchors = addMoney(currentRealWithHypotheticalAnchor, delta);
+    }
+
+    result.itau = {
+      currentReal: currentReal.toString(),
+      approvedMutationsDelta: delta.toString(),
+      WITHOUT_OPENING_ANCHORS: withoutAnchors.toString(),
+      cutoverAnchorCandidate: itauOpeningValue ?? null,
+      anchorDateUsedForSimulation: anchorDateUsed?.toISOString() ?? null,
+      anchorSwapNetEffect: anchorSwapEffect?.toString() ?? null,
+      anchorSwapNote: "Trocar o anchor NÃO é '+ o valor do anchor' — é trocar a data de corte que decide quais movimentos reais já persistidos contam. O efeito líquido (anchorSwapNetEffect) é o que realmente muda o saldo, não o valor nominal do cutoverAnchorCandidate.",
+      WITH_OPENING_ANCHORS: withAnchors?.toString() ?? null,
+      postCheckpointDeltaNote: "O delta pós-checkpoint (+0,03) permanece UNRESOLVED_POST_CHECKPOINT_DIFFERENCE em AMBOS os cenários (WITH e WITHOUT) — nunca absorvido no anchor, nunca aplicado.",
+      coherenceWarning:
+        "MESMO com o cutover anchor aplicado, este resultado NÃO se aproxima de checkpointA (8730.47) nem checkpointB (2879.17) porque os 29 movimentos operacionais do lote (24/08-04/09) NUNCA são persistidos individualmente nesta fase (só alimentam o CÁLCULO do anchor derivado, ver item 13) — o anchor sozinho não substitui o ledger real ainda não lançado. O subsistema Itaú NÃO fica coerente com este apply, com ou sem anchor.",
+    };
+  }
+
+  if (vaAccount) {
+    const currentReal = await computeAccountBalance(vaAccount.id);
+    const delta = accountDelta.get(vaAccount.id) ?? ZERO;
+    const withoutAnchors = addMoney(currentReal, delta);
+
+    const vaOpeningValue = centLevelScenarios?.ambiguities?.[0]?.scenarioA_canonicalIsCorrect?.derivedOpeningBalanceVA ?? (centLevelScenarios?.status === "NO_CENT_LEVEL_AMBIGUITY" ? null : null);
+    let withAnchors = null;
+    let anchorSwapEffect = null;
+    let anchorDateUsed = null;
+    if (vaOpeningValue != null && input?.restrictedAccount?.recharge?.date) {
+      anchorDateUsed = new Date(new Date(input.restrictedAccount.recharge.date).getTime() - 24 * 60 * 60 * 1000);
+      const currentRealWithHypotheticalAnchor = await computeAccountBalanceWithHypotheticalAnchor(vaAccount.id, { anchorDate: anchorDateUsed, anchorBalance: vaOpeningValue });
+      anchorSwapEffect = subtractMoney(currentRealWithHypotheticalAnchor, currentReal);
+      withAnchors = addMoney(currentRealWithHypotheticalAnchor, delta);
+    }
+
+    result.va = {
+      currentReal: currentReal.toString(),
+      approvedMutationsDelta: delta.toString(),
+      WITHOUT_OPENING_ANCHORS: withoutAnchors.toString(),
+      cutoverAnchorCandidate: vaOpeningValue,
+      anchorDateUsedForSimulation: anchorDateUsed?.toISOString() ?? null,
+      anchorSwapNetEffect: anchorSwapEffect?.toString() ?? null,
+      WITH_OPENING_ANCHORS: withAnchors?.toString() ?? null,
+      canonicalTarget: input?.restrictedAccount?.observedClosing?.amount != null ? money(input.restrictedAccount.observedClosing.amount).toString() : null,
+      matchesCanonicalTarget: withAnchors != null && input?.restrictedAccount?.observedClosing?.amount != null ? compareMoney(withAnchors, money(input.restrictedAccount.observedClosing.amount)) === 0 : null,
+    };
+  }
+
+  return result;
+}
+
+// ============================================================================
+// Item 13 — Itaú coherence breakdown, em grupos que NUNCA se sobrepõem (cada
+// movimento real conta em UM grupo só, sem dupla contagem entre "alimenta o
+// anchor" e "está no apply candidate").
+// ============================================================================
+function buildItauCoherenceBreakdown(input, { itauOperationalLedger }) {
+  const datedApprovedMovements = (input.checkingAccount?.movementsAfterCheckpointA || []).map((m) => ({ description: m.description, amount: m.amount, type: m.type, date: m.date }));
+  const reclassification = (input.reclassifiedIncomes || []).map((r) => ({ description: r.description, amount: r.amount, effect: "Itaú +" + r.amount + " / VA -" + r.amount }));
+
+  return {
+    group_A_operationalLedgerLot: {
+      description: `${itauOperationalLedger?.movementCount ?? "?"} movimentos operacionais (lote sem data individual confirmada)`,
+      netOperationalMovements: itauOperationalLedger?.netOperationalMovements ?? null,
+      derivedOpeningBalanceItau: itauOperationalLedger?.derivedOpeningBalanceItau ?? null,
+      persistedCount: 0,
+      inApplyCandidateCount: 0,
+      note: `NUNCA persistidos individualmente nesta fase — só alimentam o CÁLCULO do opening anchor derivado (${itauOperationalLedger?.derivedOpeningBalanceItau ?? "?"}). Se o anchor for aprovado, o efeito já está embutido nele (ver anchorSwapNetEffect em simulateWithAndWithoutOpeningAnchors) — listá-los TAMBÉM como movimentos separados seria dupla contagem.`,
+      netEffectIfAnchorApproved: "embutido no anchor — não aplicado separadamente",
+      netEffectIfAnchorNotApproved: "0 — nenhum efeito, nada persistido",
+    },
+    group_B_datedPostCheckpointMovements: {
+      description: "Movimentos pós-checkpoint com data exata confirmada (férias/CNPJ/namorada)",
+      items: datedApprovedMovements,
+      persistedCount: 0,
+      inApplyCandidateCount: datedApprovedMovements.length,
+      netEffect: sumMoney(
+        datedApprovedMovements.map((m) => (m.type === "INFLOW" ? money(m.amount) : subtractMoney(ZERO, money(m.amount))))
+      ).toString(),
+    },
+    group_C_reclassification: {
+      description: "Reclassificação de Income já persistido (VA->Itaú) — não é movimento novo",
+      items: reclassification,
+      netEffectOnItau: reclassification.length > 0 ? sumMoney(reclassification.map((r) => money(r.amount))).toString() : "0",
+    },
+    group_D_postCheckpointUnresolvedDelta: {
+      description: "+0,03 entre checkpointA reconciliado e checkpointB observado",
+      status: "UNRESOLVED_POST_CHECKPOINT_DIFFERENCE",
+      appliedAnywhere: false,
+    },
+    mathematicalSummary: {
+      formula: "saldo atual do dev + mutations aprovadas (grupo B+C) + cutover opening candidate (grupo A, se aprovado) = resultado — grupo D nunca entra",
+      conclusion: "Mesmo somando os grupos B+C+A (se aprovado), o resultado NÃO fecha com checkpointA/checkpointB — porque o grupo A só entra como UM anchor agregado, nunca como os 29 lançamentos individuais reais que ainda faltam persistir. O subsistema Itaú permanece NÃO reconciliado após este apply, independente da aprovação do anchor.",
+    },
   };
 }
 
@@ -3069,6 +3362,25 @@ async function main() {
     itauAccount: itauAccountForSimulation,
     vaAccount: vaAccountForSimulation,
   });
+  const withAndWithoutOpeningAnchors = await simulateWithAndWithoutOpeningAnchors(fullApplyManifest, {
+    input,
+    itauAccount: itauAccountForSimulation,
+    vaAccount: vaAccountForSimulation,
+    itauOperationalLedger,
+    centLevelScenarios,
+  });
+  const itauCoherenceBreakdown = buildItauCoherenceBreakdown(input, { itauOperationalLedger });
+
+  const manifestStatusCounts = fullApplyManifest.reduce((acc, m) => {
+    acc[m.status] = (acc[m.status] ?? 0) + 1;
+    return acc;
+  }, {});
+  const manifestCountsCheck = {
+    totalEntries: fullApplyManifest.length,
+    byStatus: manifestStatusCounts,
+    sumOfCategories: Object.values(manifestStatusCounts).reduce((a, b) => a + b, 0),
+    countsReconcile: Object.values(manifestStatusCounts).reduce((a, b) => a + b, 0) === fullApplyManifest.length,
+  };
 
   const report = {
     meta: { generatedAt: new Date().toISOString(), asOf: input.asOf, tool: "scripts/snapshot-dry-run.mjs", writesToDb: false },
@@ -3156,6 +3468,9 @@ async function main() {
     Z5_preflightAssertionsForFase51B: preflightAssertions,
     Z6_postApplySimulation_APPROVED_CANDIDATE_ONLY: postApplySimulation,
     Z7_approvedOnlyPersistedStateSimulation_REAL_EXECUTION: approvedOnlyPersistedSimulation,
+    Z8_withAndWithoutOpeningAnchors: withAndWithoutOpeningAnchors,
+    Z9_itauCoherenceBreakdown: itauCoherenceBreakdown,
+    Z10_manifestCountsCheck: manifestCountsCheck,
   };
 
   console.log(JSON.stringify(report, null, 2));
@@ -3196,10 +3511,13 @@ export {
   reconcileItauOperationalLedger,
   auditExternalInstallmentSettlementSemantics,
   buildCardBillManifestById,
+  investigateLegacyCardBillArtifact,
   buildFullApplyManifest,
   buildMutationOrdering,
   buildAtomicityStrategy,
   buildPreflightAssertions,
   simulatePostApplyState,
   simulateApprovedOnlyPersistedState,
+  simulateWithAndWithoutOpeningAnchors,
+  buildItauCoherenceBreakdown,
 };
