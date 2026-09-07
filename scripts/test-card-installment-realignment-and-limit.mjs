@@ -194,6 +194,37 @@ console.log("--- Fase 5.1B-CARD-v2: testes sintéticos (Installment realignment 
   check("[H] NUNCA afirma byteIdentical=true se updatedAt divergiu, mesmo com negócio idêntico", result.byteIdentical === false);
 }
 
+// ============================================================================
+// I — injeção de `client` (item 18 da Fase 5.1B-CARD-v2): confirma que
+// passar `client: tx` faz as funções REAIS lerem o estado AINDA NÃO
+// COMMITADO da própria transação — o mecanismo central da nova estratégia
+// de validação transaction-scoped. Sem `client`, comportamento é idêntico
+// ao de sempre (confirmado pelos testes A-H acima, que não passam client).
+// ============================================================================
+{
+  const suffix = Date.now() + 4;
+  const account = await prisma.account.create({ data: { slug: `teste-51bv2-txclient-acc-${suffix}`, name: `[${MARK}] conta tx-client`, type: "checking" } });
+  const card = await prisma.card.create({ data: { slug: `teste-51bv2-txclient-card-${suffix}`, name: `[${MARK}] cartão tx-client`, totalLimit: 1000, dueDay: 11, closingDay: 4, accountId: account.id } });
+
+  try {
+    let sawInsideTx = null;
+    let sawOutsideTxDuring = null;
+    await prisma.$transaction(async (tx) => {
+      await tx.cardLimitUpdate.create({ data: { cardId: card.id, newUsedLimit: money(77), reportedAvailable: money(923), occurredAt: new Date("2026-01-01T00:00:00.000Z"), source: "manual" } });
+      // Lida via `client: tx` -> DEVE enxergar o create acima, ainda não commitado.
+      sawInsideTx = await computeCardUsedLimit(card.id, { client: tx });
+    });
+    // Fora da transação (já commitada) — mesmo resultado, agora via prisma global.
+    const sawAfterCommit = await computeCardUsedLimit(card.id);
+    check("[I] computeCardUsedLimit(client: tx) enxerga o write AINDA NÃO commitado dentro da própria transação", eq(sawInsideTx, 77));
+    check("[I] após o commit, o prisma global também enxerga (write realmente persistiu)", eq(sawAfterCommit, 77));
+  } finally {
+    await prisma.cardLimitUpdate.deleteMany({ where: { cardId: card.id } });
+    await prisma.card.delete({ where: { id: card.id } }).catch(() => {});
+    await prisma.account.delete({ where: { id: account.id } }).catch(() => {});
+  }
+}
+
 console.log(`\n${passed}/${results.length} teste(s) passaram.`);
 const failed = results.filter((r) => !r.ok);
 if (failed.length > 0) {
