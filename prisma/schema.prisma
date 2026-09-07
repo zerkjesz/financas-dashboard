@@ -34,8 +34,8 @@ model Account {
 
   incomes            Income[]
   expenses           Expense[]
-  transfersFrom      Transfer[]          @relation("TransferFromAccount")
-  transfersTo        Transfer[]          @relation("TransferToAccount")
+  transfersFrom      Transfer[]            @relation("TransferFromAccount")
+  transfersTo        Transfer[]            @relation("TransferToAccount")
   balanceAdjustments BalanceAdjustment[]
   recurringRules     RecurringRule[]
   cards              Card[]
@@ -50,7 +50,7 @@ model Card {
   name       String
   accountId  String?
   account    Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
-  totalLimit Decimal @db.Decimal(12, 2)
+  totalLimit Decimal  @db.Decimal(12, 2)
   closingDay Int? // null = desconhecido, editável depois
   dueDay     Int
   createdAt  DateTime @default(now())
@@ -65,24 +65,24 @@ model Card {
 }
 
 model Income {
-  id                  String         @id @default(cuid())
-  amount              Decimal        @db.Decimal(12, 2)
-  description         String
-  category            String         @default("Outros")
-  accountId           String
-  account             Account        @relation(fields: [accountId], references: [id])
-  recurringRuleId     String?
-  recurringRule       RecurringRule? @relation(fields: [recurringRuleId], references: [id], onDelete: SetNull)
-  isRecurring         Boolean        @default(false)
-  source              String         @default("manual") // "telegram" | "manual" | "migration"
+  id                      String          @id @default(cuid())
+  amount                  Decimal         @db.Decimal(12, 2)
+  description             String
+  category                String          @default("Outros")
+  accountId               String
+  account                 Account         @relation(fields: [accountId], references: [id])
+  recurringRuleId         String?
+  recurringRule           RecurringRule?  @relation(fields: [recurringRuleId], references: [id], onDelete: SetNull)
+  isRecurring             Boolean         @default(false)
+  source                  String          @default("manual") // "telegram" | "manual" | "migration"
   // Nullable de propósito, SEM default de banco (Fase 3.2) — registro pré-existente
   // (migrado antes desta fase) fica NULL = "não classificado", nunca uma afirmação
   // silenciosa de CONFIRMED que a migration não tem como saber se é verdade. Todo
   // registro NOVO passa por lib/dataConfidence.js:resolveConfidence() na fronteira
   // de criação, que aplica CONFIRMED como default só ali (nunca via @default aqui).
-  confidence          DataConfidence?
-  rawMessage          String?
-  legacyTransactionId String?        @unique
+  confidence              DataConfidence?
+  rawMessage              String?
+  legacyTransactionId     String?         @unique
   // Fase 4.0.2 — identifica EXPLICITAMENTE qual ocorrência prevista de
   // `recurringRuleId` este Income realiza, pela DATA EXATA prevista (não por mês
   // calendário nem ciclo financeiro — os três são conceitos diferentes e não
@@ -93,10 +93,10 @@ model Income {
   // vínculo explícito só passa a existir via
   // lib/incomeHorizon.js:recordRecurringIncomeOccurrence()/
   // linkIncomeToRecurringOccurrence(), nunca por heurística.
-  recurringOccurrenceDate DateTime? @db.Date
-  occurredAt          DateTime       @default(now())
-  createdAt           DateTime       @default(now())
-  updatedAt           DateTime       @updatedAt
+  recurringOccurrenceDate DateTime?       @db.Date
+  occurredAt              DateTime        @default(now())
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
 
   receivable Receivable?
 
@@ -106,27 +106,27 @@ model Income {
 }
 
 model Expense {
-  id                  String         @id @default(cuid())
-  amount              Decimal        @db.Decimal(12, 2)
+  id                  String          @id @default(cuid())
+  amount              Decimal         @db.Decimal(12, 2)
   description         String
-  category            String         @default("Outros")
+  category            String          @default("Outros")
   accountId           String?
-  account             Account?       @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  account             Account?        @relation(fields: [accountId], references: [id], onDelete: SetNull)
   cardId              String?
-  card                Card?          @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  card                Card?           @relation(fields: [cardId], references: [id], onDelete: SetNull)
   recurringRuleId     String?
-  recurringRule       RecurringRule? @relation(fields: [recurringRuleId], references: [id], onDelete: SetNull)
-  billId              String?        @unique
-  bill                Bill?          @relation(fields: [billId], references: [id], onDelete: SetNull)
-  isRecurring         Boolean        @default(false)
-  source              String         @default("manual")
+  recurringRule       RecurringRule?  @relation(fields: [recurringRuleId], references: [id], onDelete: SetNull)
+  billId              String?         @unique
+  bill                Bill?           @relation(fields: [billId], references: [id], onDelete: SetNull)
+  isRecurring         Boolean         @default(false)
+  source              String          @default("manual")
   // Ver comentário equivalente em Income.confidence — mesma política.
   confidence          DataConfidence?
   rawMessage          String?
-  legacyTransactionId String?        @unique
-  occurredAt          DateTime       @default(now())
-  createdAt           DateTime       @default(now())
-  updatedAt           DateTime       @updatedAt
+  legacyTransactionId String?         @unique
+  occurredAt          DateTime        @default(now())
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
 
   externalInstallment ExternalInstallment?
   confirmedCommitment ConfirmedCommitment?
@@ -138,80 +138,80 @@ model Expense {
 }
 
 model Transfer {
-  id            String    @id @default(cuid())
-  amount        Decimal   @db.Decimal(12, 2)
+  id            String          @id @default(cuid())
+  amount        Decimal         @db.Decimal(12, 2)
   description   String
   fromAccountId String?
-  fromAccount   Account?  @relation("TransferFromAccount", fields: [fromAccountId], references: [id], onDelete: SetNull)
+  fromAccount   Account?        @relation("TransferFromAccount", fields: [fromAccountId], references: [id], onDelete: SetNull)
   toAccountId   String?
-  toAccount     Account?  @relation("TransferToAccount", fields: [toAccountId], references: [id], onDelete: SetNull)
+  toAccount     Account?        @relation("TransferToAccount", fields: [toAccountId], references: [id], onDelete: SetNull)
   toCardId      String?
-  toCard        Card?     @relation(fields: [toCardId], references: [id], onDelete: SetNull)
+  toCard        Card?           @relation(fields: [toCardId], references: [id], onDelete: SetNull)
   cardBillId    String?
-  cardBill      CardBill? @relation(fields: [cardBillId], references: [id], onDelete: SetNull)
-  kind          String    @default("generic") // "generic" | "card_bill_payment" | "installment_anticipation"
-  source        String    @default("manual")
+  cardBill      CardBill?       @relation(fields: [cardBillId], references: [id], onDelete: SetNull)
+  kind          String          @default("generic") // "generic" | "card_bill_payment" | "installment_anticipation"
+  source        String          @default("manual")
   // Ver comentário em Income.confidence — mesma política (nullable, sem default de banco).
   confidence    DataConfidence?
   rawMessage    String?
-  occurredAt    DateTime  @default(now())
-  createdAt     DateTime  @default(now())
+  occurredAt    DateTime        @default(now())
+  createdAt     DateTime        @default(now())
 
   @@index([occurredAt])
 }
 
 model BalanceAdjustment {
-  id         String   @id @default(cuid())
+  id         String          @id @default(cuid())
   accountId  String
-  account    Account  @relation(fields: [accountId], references: [id])
-  newBalance Decimal @db.Decimal(12, 2)
+  account    Account         @relation(fields: [accountId], references: [id])
+  newBalance Decimal         @db.Decimal(12, 2)
   note       String?
-  source     String   @default("manual") // "telegram" | "manual" | "migration"
+  source     String          @default("manual") // "telegram" | "manual" | "migration"
   // Ver comentário em Income.confidence — mesma política (nullable, sem default de banco).
   confidence DataConfidence?
   rawMessage String?
-  occurredAt DateTime @default(now())
-  createdAt  DateTime @default(now())
+  occurredAt DateTime        @default(now())
+  createdAt  DateTime        @default(now())
 
   @@index([accountId, occurredAt])
 }
 
 model CardLimitUpdate {
-  id                String   @id @default(cuid())
+  id                String          @id @default(cuid())
   cardId            String
-  card              Card     @relation(fields: [cardId], references: [id])
-  newTotalLimit     Decimal? @db.Decimal(12, 2) // setado só se o limite total também mudou
-  newUsedLimit      Decimal  @db.Decimal(12, 2) // valor-âncora
-  reportedAvailable Decimal? @db.Decimal(12, 2) // valor bruto que o usuário informou, mantido pra auditoria
+  card              Card            @relation(fields: [cardId], references: [id])
+  newTotalLimit     Decimal?        @db.Decimal(12, 2) // setado só se o limite total também mudou
+  newUsedLimit      Decimal         @db.Decimal(12, 2) // valor-âncora
+  reportedAvailable Decimal?        @db.Decimal(12, 2) // valor bruto que o usuário informou, mantido pra auditoria
   note              String?
-  source            String   @default("manual")
+  source            String          @default("manual")
   // Ver comentário em Income.confidence — mesma política (nullable, sem default de banco).
   confidence        DataConfidence?
   rawMessage        String?
-  occurredAt        DateTime @default(now())
-  createdAt         DateTime @default(now())
+  occurredAt        DateTime        @default(now())
+  createdAt         DateTime        @default(now())
 
   @@index([cardId, occurredAt])
 }
 
 model Purchase {
-  id                        String   @id @default(cuid())
+  id                        String          @id @default(cuid())
   description               String
-  totalAmount               Decimal  @db.Decimal(12, 2)
+  totalAmount               Decimal         @db.Decimal(12, 2)
   installmentCount          Int
-  installmentValue          Decimal  @db.Decimal(12, 2)
-  category                  String   @default("Outros")
+  installmentValue          Decimal         @db.Decimal(12, 2)
+  category                  String          @default("Outros")
   cardId                    String
-  card                      Card     @relation(fields: [cardId], references: [id])
+  card                      Card            @relation(fields: [cardId], references: [id])
   firstInstallmentMonth     String // "2026-09" (YYYY-MM)
-  startingInstallmentNumber Int      @default(1)
-  source                    String   @default("manual")
+  startingInstallmentNumber Int             @default(1)
+  source                    String          @default("manual")
   // Ver comentário em Income.confidence — mesma política (nullable, sem default de banco).
   confidence                DataConfidence?
   rawMessage                String?
-  purchasedAt               DateTime @default(now())
-  createdAt                 DateTime @default(now())
-  updatedAt                 DateTime @updatedAt
+  purchasedAt               DateTime        @default(now())
+  createdAt                 DateTime        @default(now())
+  updatedAt                 DateTime        @updatedAt
 
   installments Installment[]
 
@@ -277,25 +277,25 @@ model RecurringRule {
 }
 
 model Bill {
-  id              String         @id @default(cuid())
+  id              String          @id @default(cuid())
   description     String
-  amount          Decimal        @db.Decimal(12, 2)
-  category        String?        @default("Outros")
+  amount          Decimal         @db.Decimal(12, 2)
+  category        String?         @default("Outros")
   accountId       String?
-  account         Account?       @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  account         Account?        @relation(fields: [accountId], references: [id], onDelete: SetNull)
   dueDate         DateTime
   recurringRuleId String?
-  recurringRule   RecurringRule? @relation(fields: [recurringRuleId], references: [id], onDelete: SetNull)
+  recurringRule   RecurringRule?  @relation(fields: [recurringRuleId], references: [id], onDelete: SetNull)
   cycleMonth      String? // só quando gerada a partir de uma RecurringRule ("2026-09")
-  status          String         @default("pending") // "pending" | "paid" | "overdue" | "cancelled"
+  status          String          @default("pending") // "pending" | "paid" | "overdue" | "cancelled"
   notes           String?
-  source          String         @default("manual") // "manual" | "telegram"
+  source          String          @default("manual") // "manual" | "telegram"
   // Ver comentário em Income.confidence — mesma política (nullable, sem default de banco).
   confidence      DataConfidence?
   rawMessage      String?
   paidAt          DateTime?
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
   expense Expense?
 
@@ -385,13 +385,30 @@ enum ExternalInstallmentPlanStatus {
   CANCELLED
 }
 
+// Fase 5.2B — estratégia temporal do plano. Fonte ÚNICA de verdade sobre timing
+// (nunca duplicada no ExternalInstallment filho — ver comentário lá): um plano
+// tradicional tem uma data de calendário real conhecida; um plano cujo fato
+// conhecido é só "pago geralmente logo depois do próximo salário/renda, dia
+// exato desconhecido" NUNCA deve forçar uma data de calendário inventada só
+// pra satisfazer o schema — CALENDAR_DATE vs AFTER_NEXT_INCOME é exatamente
+// essa distinção, explícita e fechada (nunca uma String livre).
+enum ExternalInstallmentDueTiming {
+  CALENDAR_DATE // firstDueDate/dueDate são datas de calendário reais, conhecidas.
+  AFTER_NEXT_INCOME // sem data exata conhecida — só "vence relativo à próxima renda". firstDueDate/dueDate ficam null; ver lib/obligationClassifier.js pra como isso é classificado.
+}
+
 model ExternalInstallmentPlan {
   id               String                        @id @default(cuid())
   description      String
   creditor         String // pessoa/entidade credora — "mãe", "namorada", "loja X"
   installmentValue Decimal                       @db.Decimal(12, 2)
   installmentCount Int
-  firstDueDate     DateTime
+  // Nullable de propósito (Fase 5.2B) — obrigatório em CALENDAR_DATE, deve ficar
+  // ausente em AFTER_NEXT_INCOME (nunca uma data de calendário inventada pra
+  // satisfazer NOT NULL). Validado em lib/externalInstallments.js na fronteira
+  // de criação, não só aqui no schema.
+  firstDueDate     DateTime?
+  dueTiming        ExternalInstallmentDueTiming  @default(CALENDAR_DATE)
   status           ExternalInstallmentPlanStatus @default(ACTIVE)
   confidence       DataConfidence?
   notes            String?
@@ -407,23 +424,30 @@ enum ExternalInstallmentStatus {
 }
 
 model ExternalInstallment {
-  id        String                     @id @default(cuid())
+  id        String                    @id @default(cuid())
   planId    String
-  plan      ExternalInstallmentPlan    @relation(fields: [planId], references: [id], onDelete: Cascade)
+  plan      ExternalInstallmentPlan   @relation(fields: [planId], references: [id], onDelete: Cascade)
   number    Int
-  amount    Decimal                    @db.Decimal(12, 2)
-  dueDate   DateTime
-  status    ExternalInstallmentStatus  @default(PENDING)
+  amount    Decimal                   @db.Decimal(12, 2)
+  // Nullable de propósito (Fase 5.2B) — null exatamente quando plan.dueTiming ==
+  // AFTER_NEXT_INCOME (sem sentinel fake tipo 1970-01-01/2099-01-01/data do
+  // salário/data de hoje). dueTiming NÃO é duplicado aqui — é lido do Plan
+  // (fonte única) por quem classifica (lib/obligationClassifier.js), que também
+  // decide, por número/status entre as irmãs do mesmo plano, se ESTA parcela é
+  // a próxima-a-vencer (NEXT_INCOME_WINDOW_COMMITMENT) ou uma futura mais atrás
+  // na fila (FUTURE_OBLIGATION) — nunca todas as parcelas restantes de uma vez.
+  dueDate   DateTime?
+  status    ExternalInstallmentStatus @default(PENDING)
   paidAt    DateTime?
   // Opcional de propósito: parcela paga antes do início do histórico operacional
   // (ver AppSettings.operationalHistoryStart) pode estar PAID sem ter um Expense
   // operacional correspondente — reconstruir esse histórico não é objetivo desta
   // fase. Confidence NÃO existe aqui: é herdada semanticamente do Plan (a parcela é
   // gerada deterministicamente a partir dele, não é um fato independente).
-  expenseId String?                    @unique
-  expense   Expense?                   @relation(fields: [expenseId], references: [id], onDelete: SetNull)
-  createdAt DateTime                   @default(now())
-  updatedAt DateTime                   @updatedAt
+  expenseId String?                   @unique
+  expense   Expense?                  @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  createdAt DateTime                  @default(now())
+  updatedAt DateTime                  @updatedAt
 
   @@unique([planId, number])
   @@index([dueDate])
@@ -456,9 +480,9 @@ model ConfirmedCommitment {
   // fundingAccountId fica reservado no schema pra um funding direto por Account,
   // trabalho futuro, sem necessidade de migration nova quando chegar a hora).
   fundingAccountId String?
-  fundingAccount   Account? @relation(fields: [fundingAccountId], references: [id], onDelete: SetNull)
+  fundingAccount   Account?  @relation(fields: [fundingAccountId], references: [id], onDelete: SetNull)
   fundingReserveId String?
-  fundingReserve   Reserve? @relation(fields: [fundingReserveId], references: [id], onDelete: SetNull)
+  fundingReserve   Reserve?  @relation(fields: [fundingReserveId], references: [id], onDelete: SetNull)
   fundedAt         DateTime?
 
   settledAt DateTime?

@@ -59,25 +59,33 @@ function auditSchemaField(schemaText, modelName, fieldName) {
 // Item 14 — forecast por mês do pacote de parcelas externas (puro, em memória,
 // nunca precisa de data exata — só das posições atuais confirmadas).
 // ============================================================================
+// Fase 5.2B, item 12 — corrigido o off-by-one da Fase 5.2A: o loop antigo
+// parava assim que TODOS os planos zeravam, sem nunca emitir a linha terminal
+// "offset N = 0" (a prova de que o pacote realmente acabou). Agora sempre
+// empurra o offset ATUAL antes de checar se já zerou tudo, e só para depois de
+// ter emitido essa linha final — "offset" (não "month") é o termo usado daqui
+// pra frente, alinhado ao vocabulário da fase (não é uma data de calendário,
+// é uma distância em ocorrências de renda).
 function buildInstallmentRunoffSchedule(plans) {
   // Estado inicial: parcelas restantes de cada plano.
   let state = plans.map((p) => ({ description: p.description, installmentValue: money(p.installmentValue), remaining: p.installmentCount - p.paidInstallments }));
   const schedule = [];
-  let month = 0;
-  while (state.some((p) => p.remaining > 0)) {
+  let offset = 0;
+  while (true) {
     const active = state.filter((p) => p.remaining > 0);
     const monthTotal = sumMoney(active.map((p) => p.installmentValue));
     const finishingThisMonth = state.filter((p) => p.remaining === 1).map((p) => p.description);
     schedule.push({
-      month,
-      label: month === 0 ? "pacote atual" : `+${month} mês(es)`,
+      offset,
+      label: offset === 0 ? "pacote atual" : `+${offset} ocorrência(s) de renda`,
       activePlanCount: active.length,
       monthTotal: monthTotal.toString(),
       plansFinishingThisMonth: finishingThisMonth,
     });
+    if (active.length === 0) break; // acabou de emitir a linha terminal (0) — para aqui, nunca antes.
     state = state.map((p) => (p.remaining > 0 ? { ...p, remaining: p.remaining - 1 } : p));
-    month++;
-    if (month > 24) break; // guarda de segurança — nenhum plano real chega perto disso
+    offset++;
+    if (offset > 36) break; // guarda de segurança — nenhum plano real chega perto disso
   }
   return schedule;
 }
