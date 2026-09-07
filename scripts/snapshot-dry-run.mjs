@@ -3520,4 +3520,5 @@ export {
   simulateApprovedOnlyPersistedState,
   simulateWithAndWithoutOpeningAnchors,
   buildItauCoherenceBreakdown,
+  matchCanonicalExpenses,
 };
