@@ -14,7 +14,7 @@ export default function TopExpenses({ entries }) {
 
   return (
     <div className="rounded-xl border border-border bg-surface p-4 h-full">
-      <div className="text-sm font-medium text-white mb-2">Maiores gastos do período</div>
+      <div className="text-sm font-medium text-white mb-2">Maiores gastos do ciclo atual</div>
       <div className="divide-y divide-border">
         {topExpenses.map((e) => (
           <div key={e.id} className="flex items-center gap-3 py-2.5 text-sm">

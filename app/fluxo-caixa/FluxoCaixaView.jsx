@@ -10,6 +10,9 @@ const KIND_LABEL = {
   recurring_income: "Receita",
   bill: "Conta",
   card_bill: "Fatura",
+  external_installment: "Parcela externa",
+  confirmed_commitment: "Compromisso confirmado",
+  contingency: "Risco (contingência)",
 };
 
 export default function FluxoCaixaView() {

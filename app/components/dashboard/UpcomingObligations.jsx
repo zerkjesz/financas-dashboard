@@ -6,6 +6,8 @@ const STATUS_TONE = {
   paga: "bg-positive/15 text-positive",
   parcial: "bg-warning/15 text-warning",
   prevista: "bg-info/15 text-info",
+  "até a data": "bg-warning/15 text-warning",
+  "no próximo salário": "bg-info/15 text-info",
 };
 
 const KIND_ICON = {
@@ -24,6 +26,17 @@ const KIND_ICON = {
   income: (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path d="M12 19V5M6 11l6-6 6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  confirmed_commitment: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M12 8v4l3 2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  external_installment: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M4 12h16M4 12l4-4M4 12l4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
 };
