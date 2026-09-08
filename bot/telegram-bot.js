@@ -43,18 +43,42 @@ function sleep(ms) {
 
 let offset = 0;
 
+// Fase 5.3C.2, item 23 — política explícita de offset. ANTES desta fase o
+// offset avançava ANTES de processar (bug real: uma falha retryable
+// perderia o update pra sempre, nunca mais reentregue pelo getUpdates).
+// Agora: offset só avança DEPOIS de o update estar definitivamente
+// resolvido — seja com sucesso, seja com um status terminal
+// (rejected_*/duplicate_*, que não precisam de retry), seja por esgotar as
+// tentativas de um erro persistente. Retry limitado (não infinito) evita o
+// cenário oposto (item 23-C: um update permanentemente quebrado bloquearia
+// TODOS os updates seguintes pra sempre) — 3 tentativas com backoff curto é
+// suficiente pra falhas transitórias (rede/DB) sem travar o bot por um erro
+// permanente. Seguro reprocessar: cada tentativa roda dentro da própria
+// transação atômica (lib/telegramUpdateHandler.js) — uma tentativa que
+// falha nunca deixa mutação financeira parcial, só reverte tudo.
+const MAX_ATTEMPTS_PER_UPDATE = 3;
+const RETRY_BACKOFF_MS = 3000;
+
 async function pollOnce() {
   const updates = await bot.getUpdates({ offset, timeout: 25 });
   for (const update of updates) {
-    offset = update.update_id + 1; // avança o offset ANTES de processar — um update não reivindicado (auth) nunca é re-entregue pelo getUpdates.
-    try {
-      const result = await handleTelegramUpdate(update);
-      if (result.status !== "processed" && result.status !== "ignored_unsupported_update_type") {
-        console.log(`[bot] update ${update.update_id}: ${result.status}`);
+    let succeeded = false;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_UPDATE && !succeeded; attempt++) {
+      try {
+        const result = await handleTelegramUpdate(update);
+        if (result.status !== "processed" && result.status !== "ignored_unsupported_update_type") {
+          console.log(`[bot] update ${update.update_id}: ${result.status}`);
+        }
+        succeeded = true;
+      } catch (err) {
+        console.error(`[bot] erro processando update ${update.update_id} (tentativa ${attempt}/${MAX_ATTEMPTS_PER_UPDATE}):`, err.message);
+        if (attempt < MAX_ATTEMPTS_PER_UPDATE) await sleep(RETRY_BACKOFF_MS);
       }
-    } catch (err) {
-      console.error(`[bot] erro processando update ${update.update_id}:`, err.message);
     }
+    if (!succeeded) {
+      console.error(`[bot] update ${update.update_id} falhou ${MAX_ATTEMPTS_PER_UPDATE}x seguidas — desistindo e avançando. Nenhuma mutação parcial ficou persistida (cada tentativa é atômica).`);
+    }
+    offset = update.update_id + 1; // só avança DEPOIS do update estar resolvido (sucesso ou desistência), nunca antes.
   }
 }
 

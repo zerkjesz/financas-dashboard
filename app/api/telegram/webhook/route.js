@@ -51,9 +51,11 @@ export async function POST(request) {
     // propósito, seja por autorização ou por já ter sido processado).
     return NextResponse.json({ ok: true, status: result.status });
   } catch (err) {
-    // Item 14 — falha REAL de processamento: 500 permite o Telegram tentar
-    // de novo (retry legítimo, vai reivindicar o mesmo update_id de novo já
-    // que o receipt ficou FAILED).
+    // Item 14 (Fase 5.3C.2) — falha REAL de processamento: a transação
+    // inteira (lib/telegramUpdateHandler.js) foi revertida — nem o receipt
+    // nem nenhuma mutação financeira persistiram. 500 permite o Telegram
+    // tentar de novo; o retry vai reivindicar o MESMO update_id do zero,
+    // livre (nada ficou "preso").
     console.error("[telegram/webhook] erro processando update:", err.message);
     return NextResponse.json({ error: "processing_failed" }, { status: 500 });
   }
