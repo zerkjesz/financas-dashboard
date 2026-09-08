@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 const LINKS = [
   { href: "/", label: "Início" },
@@ -12,6 +12,17 @@ const LINKS = [
 
 export default function NavBar() {
   const pathname = usePathname();
+  const router = useRouter();
+
+  // Fase 5.3C, item 21 — logout mínimo, sem redesign. Não mostrado na própria
+  // tela de login (não faz sentido "sair" de onde já não se está logado).
+  async function handleLogout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.push("/login");
+    router.refresh();
+  }
+
+  if (pathname === "/login") return null;
 
   return (
     <header className="sticky top-0 z-20 border-b border-border bg-bg/90 backdrop-blur supports-[backdrop-filter]:bg-bg/70">
@@ -41,6 +52,13 @@ export default function NavBar() {
             );
           })}
         </nav>
+
+        <button
+          onClick={handleLogout}
+          className="ml-auto shrink-0 text-sm text-muted hover:text-white transition-colors cursor-pointer"
+        >
+          Sair
+        </button>
       </div>
     </header>
   );

@@ -693,6 +693,21 @@ de `migrate deploy` em produção.
 
 ---
 
+## Status de implementação — Fase 5.3C (autenticação, seção 11)
+
+A seção 11 (autenticação) foi **implementada** na Fase 5.3C, seguindo fielmente
+o desenho acima, com um único desvio técnico necessário: o separador do hash
+de senha mudou de `$` (`scrypt$N$r$p$salt$hash`) para `:`
+(`scrypt:N:r:p:salt:hash`) — o loader de env do Next.js (`@next/env`) faz
+interpolação de `$NOME`/`${NOME}` nos valores de `.env`, mesmo dentro de aspas
+simples, o que corrompia silenciosamente um hash com `$` (cada `$8`/`$1`/etc.
+virava string vazia por não existir env var com esse nome). O resto do desenho
+(scrypt nativo, `SESSION_SECRET` independente, token `{iat,exp}` assinado por
+HMAC-SHA256, cookie HttpOnly+Secure+SameSite=Lax, `middleware.js` cobrindo
+`app/**`+`app/api/**`, webhook do Telegram fora da sessão web, rate-limit via
+cookie assinado) foi implementado exatamente como planejado. Ver
+`lib/auth/**`, `middleware.js`, `docs/fase53c-prod-config-manifest.md`.
+
 ## Decisões fechadas nesta rodada
 
 1. **Horizonte de `confirmedCommitments`** — `nextIncomeDate` (próxima renda
