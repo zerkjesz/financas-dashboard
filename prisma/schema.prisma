@@ -658,6 +658,29 @@ model AppSettings {
 }
 
 // Tabela `Transaction` original, renomeada — arquivo permanente, a app não escreve mais nela.
+// Fase 5.3C.1 — idempotência DURÁVEL por Telegram update_id. NÃO-financeiro
+// (infra do bot, mesma categoria de PendingBotMessage/BotWizardSession) —
+// nunca guarda texto financeiro bruto nem segredo, só o suficiente pra
+// "claim" (reivindicar) um update exatamente uma vez mesmo entre cold
+// starts/restarts de function serverless (por isso não pode ser um Set/Map
+// em memória — ver lib/telegramIdempotency.js).
+//
+// status: "PROCESSING" | "COMPLETED" | "FAILED" (plain String, mesmo estilo
+// de outros campos de status do projeto — ex: CardBill.status/Bill.status —
+// nunca um enum Prisma novo pra um valor de 3 opções fixas e internas).
+model TelegramUpdateReceipt {
+  id          String    @id @default(cuid())
+  updateId    BigInt    @unique
+  senderId    String?
+  chatId      String?
+  status      String
+  claimedAt   DateTime  @default(now())
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([status, claimedAt])
+}
+
 model LegacyTransaction {
   id                 String   @id @default(cuid())
   type               String

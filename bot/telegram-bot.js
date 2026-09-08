@@ -1,10 +1,7 @@
 import "dotenv/config";
 import TelegramBot from "node-telegram-bot-api";
-import { processTelegramMessage } from "../lib/processTelegramMessage.js";
-import { startWizard, handleWizardCallback, MENU_FLOWS, MAIS_OPCOES_LABEL, MAIS_OPCOES_TEXT, sendMainMenu } from "../lib/botWizard.js";
-import { answerCallbackQuery } from "../lib/telegramApi.js";
-import { isAuthorizedTelegramChat } from "../lib/auth/telegramSecurity.js";
-import { getOwnerChatId, isDevBypassEnabled } from "../lib/auth/envConfig.js";
+import { handleTelegramUpdate } from "../lib/telegramUpdateHandler.js";
+import { getTelegramAllowedUserId, isDevBypassEnabled } from "../lib/auth/envConfig.js";
 
 const { TELEGRAM_TOKEN } = process.env;
 
@@ -13,25 +10,53 @@ if (!TELEGRAM_TOKEN || TELEGRAM_TOKEN === "seu_token_aqui") {
   process.exit(1);
 }
 
-// Fase 5.3C, item 13 — o polling não precisa do TELEGRAM_WEBHOOK_SECRET (só
-// existe pra provar que um POST externo veio do Telegram de verdade; aqui a
-// conexão já é direta com a API do Telegram), mas o OWNER_CHAT_ID continua
-// obrigatório: qualquer pessoa pode mandar mensagem pro bot, autenticidade
-// do transporte não implica autorização do usuário. Fail closed — sem
-// OWNER_CHAT_ID configurado, o bot recusa iniciar (exceto AUTH_DEV_BYPASS
-// explícito em dev).
-const ownerChatId = getOwnerChatId();
-if (!ownerChatId && !isDevBypassEnabled()) {
+// Fase 5.3C/5.3C.1, item 5 — a MESMA policy do webhook (sender auth +
+// private-chat + idempotência durável), nunca uma versão mais fraca só
+// porque é o processo local. TELEGRAM_ALLOWED_USER_ID é o from.id do único
+// usuário autorizado (nunca um chat.id — ver lib/auth/telegramSecurity.js).
+// Fail closed — sem isso configurado, o bot recusa iniciar (exceto
+// AUTH_DEV_BYPASS explícito em dev).
+if (!getTelegramAllowedUserId() && !isDevBypassEnabled()) {
   console.error(
-    "Configure OWNER_CHAT_ID no .env (o chat_id do Telegram do único usuário autorizado) — o bot recusa rodar sem isso. " +
-      "Alternativa só pra dev local: AUTH_DEV_BYPASS=true (nunca em produção)."
+    "Configure TELEGRAM_ALLOWED_USER_ID no .env (o from.id do Telegram do único usuário autorizado — " +
+      "mande qualquer mensagem pro bot uma vez e confira o campo message.from.id do update recebido) — " +
+      "o bot recusa rodar sem isso. Alternativa só pra dev local: AUTH_DEV_BYPASS=true (nunca em produção)."
   );
   process.exit(1);
 }
 
-// Garante que não existe webhook antigo configurado (ex: o Apps Script)
-// disputando as mensagens com o polling daqui.
+// polling:false — este arquivo implementa seu PRÓPRIO loop de long-polling
+// (abaixo) em vez de usar bot.startPolling()/os eventos 'message'/
+// 'callback_query' da lib. Motivo (Fase 5.3C.1, item 6): a lib
+// node-telegram-bot-api NÃO expõe update_id pros handlers de evento — só
+// internamente, pra controlar o offset (ver node_modules/node-telegram-bot-api/
+// src/telegramPolling.js). Sem update_id explícito não dá pra aplicar a
+// MESMA idempotência durável (lib/telegramIdempotency.js) que o webhook usa
+// — por isso chamamos bot.getUpdates() diretamente (método público da lib,
+// só a chamada HTTP crua) e processamos cada Update via
+// lib/telegramUpdateHandler.js, o MESMO caminho do webhook.
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+let offset = 0;
+
+async function pollOnce() {
+  const updates = await bot.getUpdates({ offset, timeout: 25 });
+  for (const update of updates) {
+    offset = update.update_id + 1; // avança o offset ANTES de processar — um update não reivindicado (auth) nunca é re-entregue pelo getUpdates.
+    try {
+      const result = await handleTelegramUpdate(update);
+      if (result.status !== "processed" && result.status !== "ignored_unsupported_update_type") {
+        console.log(`[bot] update ${update.update_id}: ${result.status}`);
+      }
+    } catch (err) {
+      console.error(`[bot] erro processando update ${update.update_id}:`, err.message);
+    }
+  }
+}
 
 async function start() {
   try {
@@ -40,58 +65,15 @@ async function start() {
     console.error("Não consegui autenticar no Telegram — confira se o TELEGRAM_TOKEN no .env está correto.");
     process.exit(1);
   }
-  bot.startPolling();
-  console.log("Bot rodando (polling). Aguardando mensagens...");
+  console.log("Bot rodando (polling manual, com idempotência durável por update_id). Aguardando mensagens...");
+  while (true) {
+    try {
+      await pollOnce();
+    } catch (err) {
+      console.error("Erro de polling:", err.message);
+      await sleep(3000);
+    }
+  }
 }
-
-bot.on("message", async (msg) => {
-  const chatId = msg.chat.id;
-  const text = msg.text;
-  if (!text) return;
-
-  if (!isDevBypassEnabled() && !isAuthorizedTelegramChat(chatId, ownerChatId)) {
-    return; // update genuíno do Telegram, mas de um chat não autorizado — nunca processado.
-  }
-
-  const trimmed = text.trim();
-
-  try {
-    if (trimmed === "/start") {
-      await sendMainMenu(String(chatId), "Oi! Usa os botões aqui embaixo pra registrar rapidinho, ou manda uma mensagem tipo \"50 mercado pix\" se preferir escrever.");
-      return;
-    }
-    if (MENU_FLOWS[trimmed]) {
-      await startWizard(String(chatId), MENU_FLOWS[trimmed]);
-      return;
-    }
-    if (trimmed === MAIS_OPCOES_LABEL) {
-      await bot.sendMessage(chatId, MAIS_OPCOES_TEXT);
-      return;
-    }
-
-    const result = await processTelegramMessage(text, String(chatId));
-    if (result.reply) await bot.sendMessage(chatId, result.reply);
-  } catch (err) {
-    console.error("Erro ao processar mensagem:", err);
-    await bot.sendMessage(chatId, "Deu erro ao salvar, tenta de novo.");
-  }
-});
-
-bot.on("callback_query", async (query) => {
-  const chatId = query.message.chat.id;
-  if (!isDevBypassEnabled() && !isAuthorizedTelegramChat(chatId, ownerChatId)) {
-    return;
-  }
-  try {
-    await answerCallbackQuery(query.id);
-    await handleWizardCallback(String(chatId), query.data);
-  } catch (err) {
-    console.error("Erro ao processar botão:", err);
-  }
-});
-
-bot.on("polling_error", (err) => {
-  console.error("Erro de polling:", err.message);
-});
 
 start();

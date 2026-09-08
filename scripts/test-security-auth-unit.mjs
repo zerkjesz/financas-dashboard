@@ -2,7 +2,7 @@
 // de segurança. 100% valores fictícios — nenhum segredo real aparece aqui.
 import { hashPassword, verifyPassword } from "../lib/auth/password.js";
 import { createSessionToken, verifySessionToken, signJson, verifyJson } from "../lib/auth/session.js";
-import { verifyTelegramSecret, isAuthorizedTelegramChat } from "../lib/auth/telegramSecurity.js";
+import { verifyTelegramSecret, isAuthorizedTelegramSender } from "../lib/auth/telegramSecurity.js";
 
 let passed = 0;
 let failed = 0;
@@ -61,11 +61,11 @@ async function main() {
   check(verifyTelegramSecret("segredo-fake-123", null) === false, "[telegram] verifyTelegramSecret rejeita quando não há secret configurado (nunca aceita por omissão)");
   check(verifyTelegramSecret("curto", "segredo-fake-123-bem-mais-longo") === false, "[telegram] verifyTelegramSecret rejeita tamanhos diferentes sem lançar");
 
-  check(isAuthorizedTelegramChat("111222333", "111222333") === true, "[telegram] isAuthorizedTelegramChat aceita o chatId configurado (owner)");
-  check(isAuthorizedTelegramChat(111222333, "111222333") === true, "[telegram] isAuthorizedTelegramChat compara number vs string igual (Telegram manda number)");
-  check(isAuthorizedTelegramChat("999888777", "111222333") === false, "[telegram] isAuthorizedTelegramChat rejeita chatId diferente do owner");
-  check(isAuthorizedTelegramChat(null, "111222333") === false, "[telegram] isAuthorizedTelegramChat rejeita chatId ausente");
-  check(isAuthorizedTelegramChat("111222333", null) === false, "[telegram] isAuthorizedTelegramChat rejeita quando OWNER_CHAT_ID não está configurado (nunca autoriza por omissão)");
+  check(isAuthorizedTelegramSender("111222333", "111222333") === true, "[telegram] isAuthorizedTelegramSender aceita o senderId (from.id) configurado");
+  check(isAuthorizedTelegramSender(111222333, "111222333") === true, "[telegram] isAuthorizedTelegramSender compara number vs string igual (Telegram manda number)");
+  check(isAuthorizedTelegramSender("999888777", "111222333") === false, "[telegram] isAuthorizedTelegramSender rejeita senderId diferente do allowedUserId");
+  check(isAuthorizedTelegramSender(null, "111222333") === false, "[telegram] isAuthorizedTelegramSender rejeita senderId ausente");
+  check(isAuthorizedTelegramSender("111222333", null) === false, "[telegram] isAuthorizedTelegramSender rejeita quando TELEGRAM_ALLOWED_USER_ID não está configurado (nunca autoriza por omissão)");
 
   console.log(`\n${passed}/${passed + failed} teste(s) passaram.`);
   if (failed > 0) process.exit(1);

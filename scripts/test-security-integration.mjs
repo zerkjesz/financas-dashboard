@@ -7,6 +7,16 @@
 // gerado só pra este ambiente DEV local (ver scripts/generate-password-hash.mjs
 // e o .env gitignored desta máquina) — nunca a senha real de produção, nunca
 // versionada em lugar nenhum que valha fora deste .env local.
+//
+// Correção de semântica (Fase 5.3C.1, item 24): este script cria e apaga 1
+// Goal SINTÉTICO (teste [E]) — não é "zero writes" absoluto. Classificação
+// precisa:
+//   TEMPORARY_SYNTHETIC_TEST_WRITE = YES (1 Goal fictício, criado e apagado
+//     dentro deste mesmo script)
+//   ZERO_REAL_USER_FINANCIAL_WRITES = YES (nenhum dado financeiro REAL do
+//     usuário é tocado)
+//   FINAL_FINANCIAL_STATE_DIFF = ZERO (fingerprint antes/depois do script
+//     inteiro é idêntico — o create+delete se cancela)
 import { assertTestEnvironment } from "./lib/assertTestEnvironment.js";
 assertTestEnvironment();
 
@@ -143,44 +153,26 @@ async function main() {
   // do escopo deste script; ver scripts/test-security-auth-unit.mjs pros
   // testes puros de getSessionSecret/isDevBypassEnabled cobrindo a lógica.
 
-  // --- Telegram webhook: secret validation ---
+  // --- Telegram webhook: transport secret validation (independente de
+  // sender/idempotência — ver scripts/test-telegram-trust-idempotency.mjs
+  // pros testes de sender auth (A-F) e idempotência durável (G-M) da Fase
+  // 5.3C.1). Shape de update realista (com update_id/from/chat.type) mesmo
+  // aqui, ainda que estes 2 casos rejeitem antes de olhar pra isso.
   const tgNoSecret = await fetch(`${BASE_URL}/api/telegram/webhook`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: { chat: { id: 111222333 }, text: "/start" } }),
+    body: JSON.stringify({ update_id: 900000001, message: { chat: { id: 111222333, type: "private" }, from: { id: 111222333 }, text: "/start" } }),
   });
   check(tgNoSecret.status === 401, "[I] webhook sem header de secret -> 401", `status=${tgNoSecret.status}`);
 
   const tgWrongSecret = await fetch(`${BASE_URL}/api/telegram/webhook`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Telegram-Bot-Api-Secret-Token": "secret-errado-de-proposito" },
-    body: JSON.stringify({ message: { chat: { id: 111222333 }, text: "/start" } }),
+    body: JSON.stringify({ update_id: 900000002, message: { chat: { id: 111222333, type: "private" }, from: { id: 111222333 }, text: "/start" } }),
   });
   check(tgWrongSecret.status === 401, "[H] webhook com secret errado -> 401", `status=${tgWrongSecret.status}`);
   const tgWrongSecretText = await tgWrongSecret.text();
   check(!bodyLeaksSecret(tgWrongSecretText), "[O] resposta 401 do webhook não vaza o secret configurado");
-
-  // --- K/M: secret correto, mas chat NÃO autorizado + texto financeiro
-  // realista -> aceito no transporte (200, evita retry do Telegram) mas
-  // NUNCA chega em processTelegramMessage/commitBotIntent (fingerprint
-  // prova isso: nenhuma Expense/Income nova).
-  const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (webhookSecret) {
-    const beforeTelegram = await fingerprint();
-    const tgUnauthorized = await fetch(`${BASE_URL}/api/telegram/webhook`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Telegram-Bot-Api-Secret-Token": webhookSecret },
-      body: JSON.stringify({ message: { chat: { id: 999888777 }, text: "gastei 50 reais no mercado" } }),
-    });
-    check(tgUnauthorized.status === 200, "[K] webhook com secret correto mas chat NÃO autorizado -> 200 (silenciosamente ignorado, sem 500)", `status=${tgUnauthorized.status}`);
-    const afterTelegram = await fingerprint();
-    check(
-      fingerprintsEqual(beforeTelegram, afterTelegram),
-      "[M] update de chat não autorizado NUNCA gera Expense/Income real (fingerprint idêntico)"
-    );
-  } else {
-    console.log("⚠️  TELEGRAM_WEBHOOK_SECRET não configurado neste .env — pulando teste [K]/[M] (webhook já recusaria por config ausente, testado como [I] acima).");
-  }
 
   // --- logout ---
   const logout = await fetch(`${BASE_URL}/api/auth/logout`, { method: "POST", headers: { Cookie: sessionCookie } });
@@ -193,9 +185,11 @@ async function main() {
   // Set-Cookie de expiração, fora do alcance de um teste fetch() puro.
   void dashAfterLogout;
 
-  // --- zero financial writes (fase inteira) ---
+  // --- FINAL_FINANCIAL_STATE_DIFF (fase inteira) — ver nota de classificação
+  // no topo do arquivo: houve 1 create+delete sintético (Goal, teste [E]),
+  // então isto prova DIFF FINAL zero, não "nenhuma escrita ocorreu".
   const after = await fingerprint();
-  check(fingerprintsEqual(before, after), "[18/36] fingerprint de todos os models financeiros idêntico antes/depois do script inteiro (ZERO WRITES líquidas)");
+  check(fingerprintsEqual(before, after), "[FINAL_FINANCIAL_STATE_DIFF] fingerprint de todos os models financeiros idêntico antes/depois do script inteiro (ZERO diff líquido, apesar do create+delete sintético do teste [E])");
 
   console.log(`\n${passed}/${passed + failed} teste(s) passaram.`);
   await prisma.$disconnect();
