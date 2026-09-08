@@ -50,6 +50,40 @@ const CASES = [
   ["quando cai meu salario?", true, "read_next_income"],
   ["recebi meu salario, 4900 reais", false, "income"],
   ["gastei 50 no mercado", false, "expense"],
+
+  // Fase 5.3D.1, itens 2/3/15 — SEM "?" (a frase inteira do pedido) + com
+  // acento + sem acento + variações de caixa/espaço, todas precisam
+  // continuar classificando certo depois da correção de normalize().
+  ["quanto tenho", true, "read_balance"],
+  ["quanto eu tenho", true, "read_balance"],
+  ["qual meu saldo", true, "read_balance"],
+  ["como eu tô", true, "read_summary"],
+  ["como eu to", true, "read_summary"],
+  ["quanto posso gastar", true, "read_free_money"],
+  ["quanto tenho livre", true, "read_free_money"],
+  ["quanto é seguro gastar", true, "read_free_money"],
+  ["quanto e seguro gastar", true, "read_free_money"],
+  ["quanto ta minha fatura", true, "read_card"],
+  ["quanto tá minha fatura", true, "read_card"],
+  ["quanto tenho no caju", true, "read_va"],
+  ["quanto tenho de vale", true, "read_va"],
+  ["quando cai meu salario", true, "read_next_income"],
+  ["quando cai meu salário", true, "read_next_income"],
+  ["quanto do salario ta comprometido", true, "read_next_income"],
+  ["quando minhas parcelas aliviam", true, "read_external_installments"],
+  ["QUANTO TENHO", true, "read_balance"],
+  ["  quanto tenho  ", true, "read_balance"],
+
+  // item 3 — os MESMOS writes de sempre continuam WRITE mesmo sem "?" (nunca
+  // tiveram "?" pra começo de conversa, mas reforçado explicitamente aqui
+  // porque a ampliação da detecção de interrogação é exatamente o que
+  // poderia ter quebrado isso).
+  ["meu saldo e 800", false, "balance_adjustment"],
+  ["gastei 80", false, "expense"],
+  ["gastei 80 ontem", false, "expense"],
+  ["recebi 500", false, "income"],
+  ["transferi 100", false, "transfer"],
+  ["fatura 900", false, "expense"],
 ];
 
 for (const [phrase, expectedRead, expectedIntent] of CASES) {
