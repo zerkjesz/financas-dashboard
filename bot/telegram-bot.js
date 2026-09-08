@@ -2,6 +2,7 @@ import "dotenv/config";
 import TelegramBot from "node-telegram-bot-api";
 import { handleTelegramUpdate } from "../lib/telegramUpdateHandler.js";
 import { getTelegramAllowedUserId, isDevBypassEnabled } from "../lib/auth/envConfig.js";
+import { prisma } from "../lib/prisma.js";
 
 const { TELEGRAM_TOKEN } = process.env;
 
@@ -59,26 +60,58 @@ let offset = 0;
 const MAX_ATTEMPTS_PER_UPDATE = 3;
 const RETRY_BACKOFF_MS = 3000;
 
+// Fase 5.3D, item 34 — carry-over da 5.3C.2: "avança após 3 tentativas
+// esgotadas" evita o loop infinito, mas sozinho ainda é um SILENT DROP — o
+// update válido simplesmente some, sem nenhum registro durável de que algo
+// deu errado. Corrigido aqui: depois de esgotar as tentativas, grava uma row
+// DEAD_LETTER em TelegramUpdateReceipt (não-financeira, já existente —
+// nenhuma migration nova) — um INSERT simples, direto, FORA de qualquer
+// transação que possa ter sido revertida pelas tentativas anteriores (essas
+// já não deixaram nada persistido, exatamente por serem atômicas — ver
+// lib/telegramIdempotency.js). Loga a classificação do erro (item 35) pra
+// dar contexto operacional sem guardar a mensagem financeira inteira.
+async function recordDeadLetter(update, lastError) {
+  try {
+    await prisma.telegramUpdateReceipt.create({
+      data: {
+        updateId: BigInt(update.update_id),
+        senderId: String(update.message?.from?.id ?? update.callback_query?.from?.id ?? ""),
+        chatId: String(update.message?.chat?.id ?? update.callback_query?.message?.chat?.id ?? ""),
+        status: "DEAD_LETTER",
+        claimedAt: new Date(),
+      },
+    });
+    console.error(`[bot] 🔴 DEAD_LETTER registrado pro update ${update.update_id} — erro: ${lastError?.message}. Confira manualmente se precisa reenviar essa mensagem.`);
+  } catch (err) {
+    // Nem o próprio registro de dead-letter deve derrubar o loop de polling
+    // — pior caso aqui é voltar a só logar (comportamento anterior), nunca
+    // travar o bot inteiro.
+    console.error(`[bot] falha ao gravar DEAD_LETTER pro update ${update.update_id}:`, err.message);
+  }
+}
+
 async function pollOnce() {
   const updates = await bot.getUpdates({ offset, timeout: 25 });
   for (const update of updates) {
     let succeeded = false;
+    let lastError = null;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_UPDATE && !succeeded; attempt++) {
       try {
         const result = await handleTelegramUpdate(update);
-        if (result.status !== "processed" && result.status !== "ignored_unsupported_update_type") {
+        if (result.status !== "processed" && result.status !== "processed_read" && result.status !== "ignored_unsupported_update_type") {
           console.log(`[bot] update ${update.update_id}: ${result.status}`);
         }
         succeeded = true;
       } catch (err) {
+        lastError = err;
         console.error(`[bot] erro processando update ${update.update_id} (tentativa ${attempt}/${MAX_ATTEMPTS_PER_UPDATE}):`, err.message);
         if (attempt < MAX_ATTEMPTS_PER_UPDATE) await sleep(RETRY_BACKOFF_MS);
       }
     }
     if (!succeeded) {
-      console.error(`[bot] update ${update.update_id} falhou ${MAX_ATTEMPTS_PER_UPDATE}x seguidas — desistindo e avançando. Nenhuma mutação parcial ficou persistida (cada tentativa é atômica).`);
+      await recordDeadLetter(update, lastError);
     }
-    offset = update.update_id + 1; // só avança DEPOIS do update estar resolvido (sucesso ou desistência), nunca antes.
+    offset = update.update_id + 1; // só avança DEPOIS do update estar resolvido (sucesso ou dead-letter), nunca antes.
   }
 }
 
