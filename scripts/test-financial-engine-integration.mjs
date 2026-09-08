@@ -1,19 +1,20 @@
 // Fase 4.1, itens 9/10/24/25/26 — testes de integração do Financial Engine V2
 // contra o branch dev. Fixtures 100% sintéticas (nenhum valor real do usuário).
 //
-// Nota metodológica importante: o branch dev já tem 1 Card real (Itaú) com 16
-// CardBill reais materializadas (confirmado antes de escrever este arquivo) —
-// isso significa que getIncurredLiabilities()/getObligationsBreakdown() (que
-// iteram TODOS os cartões do banco, não só os de teste) SEMPRE incluem uma
-// contribuição de fundo vinda desses dados reais. Bill/Reserve/
-// ConfirmedCommitment/ExternalInstallment/Contingency, por outro lado, estão
-// vazios fora de uma execução de teste — não têm esse problema. Por isso:
-//   - currentHorizonObligations, protectedMoney, contingencyExposure: números
-//     exatos diretos (sem contaminação real).
-//   - incurredLiabilities/freeMoney (quando envolve incurred não-zero): medidos
-//     por DELTA (snapshot antes/depois de criar a fixture), OU corrigidos
-//     somando de volta o "incurred de fundo" capturado antes da fixture — nunca
-//     por suposição de que o banco está vazio.
+// Nota metodológica importante: o branch dev tem 1 Card real (Itaú) com CardBill
+// reais materializadas, e — desde a Fase 5.2C (apply real de obrigações) —
+// TAMBÉM tem ConfirmedCommitment/ExternalInstallment/RecurringRule/Contingency
+// reais de fundo (antes disso eram sempre vazios fora de uma execução de teste;
+// esta nota já foi atualizada quando isso deixou de valer). Como
+// getIncurredLiabilities()/getCurrentHorizonObligations()/getObligationsBreakdown()
+// (que iteram TODOS os cartões/obrigações do banco, não só os de teste) SEMPRE
+// incluem essa contribuição de fundo, nenhuma seção pode mais assumir "banco
+// vazio" pra nenhum dos dois buckets. Por isso:
+//   - protectedMoney, contingencyExposure (Reserve/Contingency continuam vazios
+//     de fundo fora de teste): números exatos diretos.
+//   - incurredLiabilities E currentHorizonObligations/freeMoney: sempre medidos
+//     por DELTA (snapshot do bucket relevante ANTES de criar a fixture da seção,
+//     usado pra isolar/corrigir depois) — nunca por suposição de banco vazio.
 import { assertTestEnvironment } from "./lib/assertTestEnvironment.js";
 assertTestEnvironment();
 
@@ -192,6 +193,14 @@ async function run() {
   // ==========================================================================
   let syntheticFreeMoney, syntheticSafeToSpend;
   {
+    // Fase 5.2C — o branch dev agora TAMBÉM tem ConfirmedCommitment/
+    // ExternalInstallment/Contingency reais de fundo (antes desta fase eram
+    // sempre vazios fora de uma execução de teste — ver nota do topo do
+    // arquivo, agora desatualizada nesse ponto específico). Captura o
+    // background de CURRENT_HORIZON_OBLIGATION ANTES de criar as fixtures
+    // desta seção, mesmo padrão já usado pra "backgroundIncurred" mais abaixo.
+    const backgroundCurrentHorizonBefore = await getCurrentHorizonObligations({ nextIncomeDate: NEXT_INCOME_DATE });
+
     const checking = await mkAccount("cs-checking", "checking", 10000);
     const va = await mkAccount("cs-va", "food_voucher", 600);
     const reserve = await createReserve({ accountId: checking.id, name: `[${MARK}] Reserva cenário` });
@@ -240,7 +249,13 @@ async function run() {
     const result = await computeFreeMoney({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE, accounts });
     check("cenário: unrestrictedCash = 10000", eq(result.unrestrictedCash, 10000), serializeMoney(result.unrestrictedCash).toString());
     check("cenário: protectedMoney = 4000", eq(result.protectedMoney, 4000), serializeMoney(result.protectedMoney).toString());
-    check("cenário: currentHorizonObligations = 1800 (500+300+1000)", eq(result.currentHorizonObligations, 1800), serializeMoney(result.currentHorizonObligations).toString());
+
+    // currentHorizonObligations desta seção isolada por DELTA (Fase 5.2C: pode
+    // existir ConfirmedCommitment/ExternalInstallment/Bill reais de fundo agora
+    // — ver backgroundCurrentHorizonBefore, capturado antes de qualquer fixture
+    // desta seção existir).
+    const currentHorizonDelta = addMoney(result.currentHorizonObligations, backgroundCurrentHorizonBefore.total.negated());
+    check("cenário: currentHorizonObligations desta seção = 1800 (500+300+1000), por delta contra o fundo real", eq(currentHorizonDelta, 1800), serializeMoney(currentHorizonDelta).toString());
 
     const restrictedBalance = addMoney(totalBalances, result.unrestrictedCash.negated());
     check("cenário: restrictedBalance = 600", eq(restrictedBalance, 600), serializeMoney(restrictedBalance).toString());
@@ -257,10 +272,10 @@ async function run() {
     })());
 
     const freeMoneyExpectedGivenOnlyOurData = money(3000); // 10000 - 4000 - 1200 - 1800
-    // freeMoney bruto = freeMoneyExpectedGivenOnlyOurData - (contribuição de fundo real do Itaú, se houver saldo>0 lá)
+    // freeMoney bruto = freeMoneyExpectedGivenOnlyOurData - (contribuição de fundo real do Itaú, se houver saldo>0 lá) - (contribuição de fundo real de currentHorizon, Fase 5.2C)
     const itauContribution = result.incurredLiabilitiesItems.filter((i) => i.cardId !== card.id).reduce((s, i) => addMoney(s, i.amount), money(0));
-    const adjustedFreeMoney = addMoney(result.freeMoney, itauContribution);
-    check("cenário: freeMoney = 3000 (corrigido por qualquer saldo real de fundo do cartão Itaú)", eq(adjustedFreeMoney, 3000), `bruto=${serializeMoney(result.freeMoney)}, itauContribution=${serializeMoney(itauContribution)}, ajustado=${serializeMoney(adjustedFreeMoney)}`);
+    const adjustedFreeMoney = addMoney(addMoney(result.freeMoney, itauContribution), backgroundCurrentHorizonBefore.total);
+    check("cenário: freeMoney = 3000 (corrigido por qualquer saldo real de fundo do cartão Itaú e de currentHorizon)", eq(adjustedFreeMoney, 3000), `bruto=${serializeMoney(result.freeMoney)}, itauContribution=${serializeMoney(itauContribution)}, backgroundCurrentHorizon=${serializeMoney(backgroundCurrentHorizonBefore.total)}, ajustado=${serializeMoney(adjustedFreeMoney)}`);
 
     syntheticFreeMoney = adjustedFreeMoney;
     const safe = computeSafeToSpend(adjustedFreeMoney, 10);
@@ -346,6 +361,10 @@ async function run() {
   // 5) Reserve funding lifecycle A/B/C (item 9) — números exatos do pedido
   // ==========================================================================
   {
+    // Fase 5.2C — background de CURRENT_HORIZON_OBLIGATION capturado ANTES de
+    // criar o commitment desta seção (mesmo motivo da seção 3 acima).
+    const backgroundCurrentHorizonRF = await getCurrentHorizonObligations({ nextIncomeDate: NEXT_INCOME_DATE });
+
     const checking = await mkAccount("rf-checking", "checking", 8730);
     const reserve = await createReserve({ accountId: checking.id, name: `[${MARK}] Reserva RF` });
     created.reserves.push(reserve.id);
@@ -358,7 +377,7 @@ async function run() {
 
     // Estado A: CONFIRMED, ainda não fundado.
     const resultA = await computeFreeMoney({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE, accounts });
-    const freeMoneyA = addMoney(resultA.freeMoney, backgroundIncurred.total);
+    const freeMoneyA = addMoney(addMoney(resultA.freeMoney, backgroundIncurred.total), backgroundCurrentHorizonRF.total);
     check("RF Estado A: freeMoney = 8730 - 7000 - 2465 = -735", eq(freeMoneyA, -735), serializeMoney(freeMoneyA).toString());
 
     // Estado B: FUNDED via Reserve — RELEASE 2465, reserva cai pra 4535, commitment continua obrigação.
@@ -366,7 +385,7 @@ async function run() {
     const reserveBalanceB = await getReserveBalance(reserve.id);
     check("RF Estado B: saldo da Reserve cai pra 4535 após RELEASE", eq(reserveBalanceB, 4535), serializeMoney(reserveBalanceB).toString());
     const resultB = await computeFreeMoney({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE, accounts });
-    const freeMoneyB = addMoney(resultB.freeMoney, backgroundIncurred.total);
+    const freeMoneyB = addMoney(addMoney(resultB.freeMoney, backgroundIncurred.total), backgroundCurrentHorizonRF.total);
     check("RF Estado B: freeMoney = 8730 - 4535 - 2465 = 1730 (funding libera a reserva pro compromisso, não dobra)", eq(freeMoneyB, 1730), serializeMoney(freeMoneyB).toString());
 
     // Estado C: settlement real — cash cai pro valor pago, commitment SETTLED.
@@ -374,7 +393,7 @@ async function run() {
     const accountsC = await accountsFor([checking.id]);
     check("RF Estado C: conta cai pra 6265 (8730 - 2465)", eq(accountsC[0].balance, 6265), serializeMoney(accountsC[0].balance).toString());
     const resultC = await computeFreeMoney({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE, accounts: accountsC });
-    const freeMoneyC = addMoney(resultC.freeMoney, backgroundIncurred.total);
+    const freeMoneyC = addMoney(addMoney(resultC.freeMoney, backgroundIncurred.total), backgroundCurrentHorizonRF.total);
     check("RF Estado C: freeMoney = 6265 - 4535 = 1730", eq(freeMoneyC, 1730), serializeMoney(freeMoneyC).toString());
     check("RF: B → C freeMoney permanece economicamente estável (1730 == 1730)", eq(freeMoneyB, freeMoneyC));
   }
@@ -389,6 +408,11 @@ async function run() {
     created.commitments.push(commitment.id);
 
     const backgroundIncurred = await getIncurredLiabilities({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE });
+    // Fase 5.2C — capturado ANTES de fundar (neste ponto nosso próprio
+    // commitment ainda é FUTURE_OBLIGATION, não contribui pra currentHorizon
+    // ainda — então isto é puramente o background real, sem contaminação
+    // circular do nosso próprio fixture).
+    const backgroundCurrentHorizonFA = await getCurrentHorizonObligations({ nextIncomeDate: NEXT_INCOME_DATE });
     const accounts = await accountsFor([checking.id]);
 
     const beforeFunding = await computeFreeMoney({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE, accounts });
@@ -403,7 +427,7 @@ async function run() {
     const afterFunding = await computeFreeMoney({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE, accounts: await accountsFor([checking.id]) });
     const isInCurrentHorizonAfter = afterFunding.currentHorizonObligationsItems.some((i) => i.id === commitment.id);
     check("FA: após FUNDED, o classifier já trata como CURRENT_HORIZON_OBLIGATION (mesmo fora do horizonte por data)", isInCurrentHorizonAfter);
-    const freeMoneyAfterFundingAdjusted = addMoney(afterFunding.freeMoney, backgroundIncurred.total);
+    const freeMoneyAfterFundingAdjusted = addMoney(addMoney(afterFunding.freeMoney, backgroundIncurred.total), backgroundCurrentHorizonFA.total);
     check("FA: freeMoney cai imediatamente em 600 ao fundar (earmark), de 3000 pra 2400", eq(freeMoneyAfterFundingAdjusted, 2400), serializeMoney(freeMoneyAfterFundingAdjusted).toString());
 
     // Settlement: conta cai, commitment sai da obrigação — freeMoney deve
@@ -413,7 +437,7 @@ async function run() {
     const balanceAfterSettlement = (await accountsFor([checking.id]))[0].balance;
     check("FA: settlement debita a conta em 600 (3000 -> 2400)", eq(balanceAfterSettlement, 2400), serializeMoney(balanceAfterSettlement).toString());
     const afterSettlement = await computeFreeMoney({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE, accounts: await accountsFor([checking.id]) });
-    const freeMoneyAfterSettlementAdjusted = addMoney(afterSettlement.freeMoney, backgroundIncurred.total);
+    const freeMoneyAfterSettlementAdjusted = addMoney(addMoney(afterSettlement.freeMoney, backgroundIncurred.total), backgroundCurrentHorizonFA.total);
     check("FA: freeMoney permanece 2400 após settlement (earmark -> pagamento real é economicamente neutro)", eq(freeMoneyAfterSettlementAdjusted, 2400), serializeMoney(freeMoneyAfterSettlementAdjusted).toString());
   }
 

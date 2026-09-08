@@ -313,14 +313,24 @@ async function auditPositiveLedgerAmounts() {
   check("Nenhuma Contingency.maxAmount <= 0", contingencies === 0, `${contingencies} encontrado(s)`);
 }
 
+// Fase 5.2C — createExternalInstallmentPlan ganhou `alreadyPaidCount` (só cria
+// as child rows RESTANTES, preservando a posição original da dívida — nunca
+// recria 1..alreadyPaidCount retroativamente). Por isso o range válido não é
+// mais necessariamente 1..installmentCount: é um sufixo contíguo terminando em
+// installmentCount, começando em qualquer número entre 1 e installmentCount+1
+// (este último = plano sem nenhuma parcela pendente, range vazio, também
+// válido). O invariante real continua sendo "sem lacuna/duplicata DENTRO do
+// que existe" — só o ponto de partida deixou de ser fixo em 1.
 async function auditExternalInstallmentNumbers() {
   const plans = await prisma.externalInstallmentPlan.findMany({ include: { installments: true } });
   for (const plan of plans) {
     const numbers = plan.installments.map((i) => i.number).sort((a, b) => a - b);
-    const expected = Array.from({ length: plan.installmentCount }, (_, i) => i + 1);
+    const startNumber = numbers.length > 0 ? numbers[0] : plan.installmentCount + 1;
+    const expected = Array.from({ length: plan.installmentCount - startNumber + 1 }, (_, i) => startNumber + i);
+    const withinRange = startNumber >= 1 && numbers.every((n) => n <= plan.installmentCount);
     check(
-      `ExternalInstallmentPlan "${plan.description}" tem números de parcela 1..${plan.installmentCount} sem lacuna/duplicata`,
-      JSON.stringify(numbers) === JSON.stringify(expected),
+      `ExternalInstallmentPlan "${plan.description}" tem um sufixo contíguo de parcelas terminando em ${plan.installmentCount}, sem lacuna/duplicata`,
+      withinRange && JSON.stringify(numbers) === JSON.stringify(expected),
       `esperado ${JSON.stringify(expected)}, achado ${JSON.stringify(numbers)}`
     );
   }
