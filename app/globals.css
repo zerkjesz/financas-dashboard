@@ -116,12 +116,18 @@ body {
    (grande = display principal tipo freeMoney na Home; médio = valor de card
    secundário). Sinal explícito e cor semântica ficam por conta de quem usa
    (nunca hardcoded aqui — status/sinal dependem do dado, não do primitive). */
-.text-metric-lg { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 2rem; line-height: 1.1; font-weight: 600; letter-spacing: -0.01em; }
-.text-metric-md { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 1.25rem; line-height: 1.2; font-weight: 600; }
-
-/* Números grandes não podem quebrar layout em telas estreitas (5.4B, seção
-   37) — permite quebra de linha graciosa em vez de overflow/corte. */
-.text-metric-lg, .text-metric-md { overflow-wrap: break-word; word-break: break-word; }
+/* Fase 5.4C, item 39 — ACHADO REAL testado ao vivo em 390px: a versão
+   original desta regra (font-size fixo + overflow-wrap/word-break) deixava
+   um valor negativo tipo "-R$ 302,80" quebrar NO MEIO (o "-" isolado numa
+   linha, o resto na seguinte) — quebra de número nunca é aceitável, é pior
+   que qualquer overflow. Corrigido com as DUAS metades da solução:
+   (1) font-size fluido via clamp() encolhe antes de precisar quebrar;
+   (2) white-space: nowrap — o número nunca quebra internamente; quem usa o
+   primitive é responsável por dar largura suficiente ao contêiner (ver
+   FinancialHero.jsx: grid-cols-1 até `sm`, nunca 2 colunas apertadas com
+   valor grande dentro). */
+.text-metric-lg { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: clamp(1.375rem, 6vw, 2rem); line-height: 1.15; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+.text-metric-md { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: clamp(1rem, 4vw, 1.25rem); line-height: 1.2; font-weight: 600; white-space: nowrap; }
 
 /* ============================================================================
    Fase 5.4B, seção 20 — FOCUS SYSTEM. Todo elemento interativo NOVO usa
