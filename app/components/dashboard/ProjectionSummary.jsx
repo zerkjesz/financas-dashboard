@@ -35,7 +35,12 @@ export default function ProjectionSummary({ projectionSummary }) {
                 <div className={`tabular text-base font-semibold ${value < 0 ? "text-danger" : "text-text-primary"}`}>{formatMoney(value)}</div>
                 {stressCrossesZero && <div className="text-caption text-warning mt-0.5">stress: {formatMoney(stressValue)}</div>}
               </div>
-              {i < CHECKPOINTS.length - 1 && <ArrowRight className="ml-auto hidden h-3.5 w-3.5 shrink-0 text-border-strong sm:block" aria-hidden="true" />}
+              {/* Fase 5.4C.2, item 5 — CORRIGIDO: `text-border-strong` é cor
+                  de borda (baixo contraste contra o fundo do card), deixava
+                  a seta de sequência temporal quase invisível — o oposto do
+                  objetivo ("sentido de tempo/progressão"). `text-text-muted`
+                  é a mesma cor já usada nos ícones do rail vizinho. */}
+              {i < CHECKPOINTS.length - 1 && <ArrowRight className="ml-auto hidden h-3.5 w-3.5 shrink-0 text-text-muted sm:block" aria-hidden="true" />}
             </div>
           );
         })}

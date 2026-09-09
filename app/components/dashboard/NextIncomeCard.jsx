@@ -13,7 +13,12 @@ export default function NextIncomeCard({ nextIncome, nextIncomeCommitment }) {
   // silencioso.
   const ringPercent = percent != null ? Math.min(100, Math.max(0, percent)) : 0;
   const overCommitted = percent != null && percent > 100;
-  const ringColor = overCommitted ? "var(--color-danger)" : "var(--color-accent)";
+  // Fase 5.4C.2, item 2 — CORRIGIDO: o anel usava `--color-accent`, mas
+  // "% da renda já comprometido" é DADO, não ação/seleção/foco/brand touch
+  // (os 4 únicos trabalhos do accent na Foundation). Neutro (`text-muted`)
+  // até 100%, `danger` só quando estoura — nenhum limiar de negócio novo,
+  // só reaproveita o `overCommitted` que já existia.
+  const ringColor = overCommitted ? "var(--color-danger)" : "var(--color-text-muted)";
 
   return (
     <div className="rounded-card bg-surface-1 p-6">

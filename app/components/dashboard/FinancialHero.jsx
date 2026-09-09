@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 import { formatMoney, formatDate } from "@/lib/formatMoney";
 import Disclosure from "../ui/Disclosure.jsx";
 import {
@@ -71,7 +72,15 @@ export default function FinancialHero({ financial }) {
         <h2 className={`text-page-title mb-1.5 ${STATUS_TEXT_CLASS[liquidity.status] ?? "text-text-primary"}`}>{copy.label}</h2>
         <p className="text-body text-text-secondary mb-6 max-w-md">{copy.headline}</p>
 
-        <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:gap-10">
+        {/* Fase 5.4C.2, item 1 — CORRIGIDO: `sm:items-end` alinhava as duas
+            colunas pela base da CAIXA, não pelo NÚMERO. Quando freeMoney é
+            negativo ela ganha uma legenda extra abaixo do número — a caixa
+            fica mais alta, e alinhar pela base empurrava o número de
+            safeToSpend ~32px pra baixo (medido ao vivo), quebrando a leitura
+            de par. `sm:items-start` alinha os dois RÓTULOS no topo (mesma
+            altura sempre) e cada número segue o próprio rótulo — correto
+            com ou sem legenda. */}
+        <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:gap-10">
           <div>
             <div className="text-label text-text-muted mb-1">Dinheiro livre</div>
             <div className={`text-metric-lg ${liquidity.freeMoney < 0 ? "text-danger" : "text-text-primary"}`}>{formatMoney(liquidity.freeMoney)}</div>
@@ -82,16 +91,21 @@ export default function FinancialHero({ financial }) {
             )}
           </div>
           {/* Item 11 — safeToSpend nunca disputa protagonismo com freeMoney:
-              escala tipográfica menor (.text-metric-md), alinhado à base do
-              número maior, sem card próprio. */}
-          <div className="sm:pb-0.5">
+              escala tipográfica menor (.text-metric-md), sem card próprio. */}
+          <div>
             <div className="text-label text-text-muted mb-1">Seguro pra gastar hoje</div>
             <div className="text-metric-md text-text-primary">{formatMoney(liquidity.safeToSpend)}</div>
           </div>
         </div>
 
+        {/* Fase 5.4C.2, item 3 — CORRIGIDO: a caixa `bg-surface-1/70
+            rounded-lg` lia como "card dentro do card" (fundo + raio
+            próprios, visivelmente separada do hero). Substituída por uma
+            divisória simples — a MESMA gramática que NextIncomeCard já usa
+            pro próprio rodapé ("Já comprometido") — reduz aninhamento visual
+            sem inventar um tratamento novo. */}
         {dominant && (
-          <div className="mt-6 rounded-lg bg-surface-1/70 p-4">
+          <div className="mt-6 border-t border-border-subtle pt-4">
             <div className="text-label text-text-muted mb-2">Por que</div>
             <BreakdownItem item={dominant} />
             {restItems.length > 0 && (
@@ -108,8 +122,14 @@ export default function FinancialHero({ financial }) {
 
         {suggestSimulate && (
           <div className="mt-5">
-            <Link href="/simulador" className="focus-ring inline-block rounded-control text-sm font-medium text-accent hover:text-accent-hover transition-colors">
-              Simular antes de comprar →
+            {/* Item 4 — seta tipográfica "→" trocada por ArrowRight (Lucide),
+                mesma linguagem visual do conector de ProjectionSummary. */}
+            <Link
+              href="/simulador"
+              className="focus-ring inline-flex items-center gap-1 rounded-control text-sm font-medium text-accent hover:text-accent-hover transition-colors"
+            >
+              Simular antes de comprar
+              <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
             </Link>
           </div>
         )}

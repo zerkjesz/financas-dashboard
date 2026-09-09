@@ -25,7 +25,16 @@ export default function NavBar() {
 
   return (
     <header className="hidden md:block sticky top-0 z-20 border-b border-border-subtle bg-bg/90 backdrop-blur supports-[backdrop-filter]:bg-bg/70">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-6">
+      {/* Fase 5.4C.2, item 34 — CORRIGIDO: achado real do check de 768px
+          (zona feia entre mobile e desktop) — `gap-6` + `px-3` por item
+          somavam mais do que a largura disponível em telas 768-1023px,
+          forçando o `overflow-x-auto` do <nav> a cortar "Metas &
+          Indicadores" atrás de uma scrollbar visível. O nav só existe a
+          partir de `md` (`hidden md:block` acima) — por isso o valor
+          "apertado" vira o DEFAULT sem prefixo (cobre 768-1023 inteiro) e só
+          `lg:` (1024px+) restaura o espaçamento original, já verificado em
+          1280/1440. Nenhum breakpoint novo criado. */}
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-3 lg:gap-6">
         <Link href="/" className="focus-ring flex items-center gap-2 shrink-0 cursor-pointer">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <rect x="3" y="10" width="4" height="11" rx="1" fill="#22c55e" />
@@ -35,7 +44,7 @@ export default function NavBar() {
           <span className="text-card-title text-text-primary">Finanças</span>
         </Link>
 
-        <nav className="flex items-center gap-1 overflow-x-auto" aria-label="Navegação principal">
+        <nav className="flex items-center gap-0.5 lg:gap-1 overflow-x-auto" aria-label="Navegação principal">
           {NAV_ITEMS.map((item) => {
             const active = isNavItemActive(item, pathname);
             return (
@@ -43,7 +52,7 @@ export default function NavBar() {
                 key={item.href}
                 href={item.href}
                 aria-current={active ? "page" : undefined}
-                className={`focus-ring whitespace-nowrap rounded-control px-3 py-1.5 text-sm transition-colors cursor-pointer ${
+                className={`focus-ring whitespace-nowrap rounded-control px-2 lg:px-3 py-1.5 text-sm transition-colors cursor-pointer ${
                   // Fase 5.4B, item 42 — estado ativo nunca só por cor: peso de
                   // fonte muda junto (font-semibold vs font-medium).
                   active ? "bg-surface-2 text-text-primary font-semibold" : "text-text-muted font-medium hover:text-text-primary hover:bg-surface-1"
