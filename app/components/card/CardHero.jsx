@@ -1,6 +1,7 @@
 "use client";
 
-import { Info } from "lucide-react";
+import Link from "next/link";
+import { Info, ArrowRight } from "lucide-react";
 import { formatMoney, formatDate } from "@/lib/formatMoney";
 import Badge from "../ui/Badge.jsx";
 import { CARD_BILL_STATUS_LABEL, CARD_BILL_STATUS_BADGE_VARIANT, detailGapLabel, creditUsageTone } from "@/lib/cardPresentation";
@@ -83,6 +84,21 @@ export default function CardHero({ card, bill }) {
       <div className="mt-4">
         <div className="text-label text-text-muted mb-1">Limite disponível</div>
         <div className="text-metric-md text-restricted">{formatMoney(card.availableLimit)}</div>
+      </div>
+
+      {/* Fase 5.4E, item 13/45 — entrada contextual pro Simulador: só
+          roteia apresentação (scenario + cardId real), nunca auto-executa
+          (o Simulador sempre exige o usuário apertar "Simular" de novo —
+          ver SimuladorClient.jsx). Label descritiva e específica deste
+          cartão, nunca "Simular" genérico repetido pela tela inteira. */}
+      <div className="mt-4 border-t border-border-subtle pt-4">
+        <Link
+          href={`/simulador?scenario=card_single&cardId=${card.id}`}
+          className="focus-ring inline-flex items-center gap-1 rounded-control text-sm font-medium text-accent hover:text-accent-hover transition-colors"
+        >
+          Simular uma compra neste cartão
+          <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+        </Link>
       </div>
     </div>
   );

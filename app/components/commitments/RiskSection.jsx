@@ -8,8 +8,16 @@ import { formatMoney, formatDate } from "@/lib/formatMoney";
 // (borda tracejada, ícone tracejado, nunca preenchimento sólido de alerta):
 // risco é informação válida mas incerta, nunca um fato. expectedAmount/
 // maxAmount/expectedDate mostrados separados — nunca resumidos num único
-// número que finja certeza. CTA pro simulador é só um link simples (item
-// 32 — prefill contextual fica pra 5.4E).
+// número que finja certeza.
+//
+// Fase 5.4E, item 13/45 — o link genérico "Simular o cenário de pressão"
+// (sem contingencyId) foi substituído por um "Simular este risco" POR
+// ITEM, que é o prefill contextual real que o comentário acima já previa
+// pra esta fase: routes com `?scenario=risk&contingencyId=<id real>`, o
+// Simulador valida o id contra a lista real antes de pré-preencher (nunca
+// confia cegamente na query string) e NUNCA auto-executa — só troca pra
+// aba "Risco virar realidade" com o risco já selecionado; o usuário ainda
+// aperta "Simular".
 export default function RiskSection({ contingency }) {
   if (!contingency || !contingency.items || contingency.items.length === 0) return null;
 
@@ -24,22 +32,24 @@ export default function RiskSection({ contingency }) {
         <span>máximo {formatMoney(contingency.maximumExposure)}</span>
       </div>
 
-      <div className="space-y-3 mb-4">
+      <div className="space-y-3">
         {contingency.items.map((item) => (
-          <div key={item.id} className="text-sm">
+          <div key={item.id} className="text-sm border-t border-border-subtle/60 pt-3 first:border-t-0 first:pt-0">
             <div className="text-text-secondary">{item.description}</div>
-            <div className="text-caption text-text-muted">
+            <div className="text-caption text-text-muted mb-2">
               esperado {item.expectedAmount != null ? formatMoney(item.expectedAmount) : "desconhecido"} · máximo {formatMoney(item.maxAmount)} ·{" "}
               {item.expectedDate ? `previsto ${formatDate(item.expectedDate)}` : "timing desconhecido"}
             </div>
+            <Link
+              href={`/simulador?scenario=risk&contingencyId=${item.id}`}
+              className="focus-ring inline-flex items-center gap-1 rounded-control text-sm font-medium text-accent hover:text-accent-hover transition-colors"
+            >
+              Simular este risco
+              <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+            </Link>
           </div>
         ))}
       </div>
-
-      <Link href="/simulador" className="focus-ring inline-flex items-center gap-1 rounded-control text-sm font-medium text-accent hover:text-accent-hover transition-colors">
-        Simular o cenário de pressão
-        <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
-      </Link>
     </div>
   );
 }
