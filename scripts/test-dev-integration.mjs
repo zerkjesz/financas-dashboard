@@ -22,7 +22,6 @@ import { computeCardUsedLimit } from "../lib/cards.js";
 import { getOrCreateBill, payBill, computeExpectedCardBillTotal } from "../lib/cardBillCalculator.js";
 import { generateInstallmentSchedule } from "../lib/installments.js";
 import { buildVaSnapshot } from "../lib/vaPanel.js";
-import { buildCashFlowProjection } from "../lib/cashFlowProjection.js";
 import { money, addMoney, subtractMoney, compareMoney, serializeMoney } from "../lib/money.js";
 
 const MARK = "TESTE_FASE31";
@@ -195,13 +194,15 @@ async function run() {
   }
 
   // ---- 11. Projeção de caixa — Bill temporária deve aparecer na timeline ----
-  const projBill = await prisma.bill.create({
-    data: { description: `[${MARK}] Projeção`, amount: 88.5, category: "Outros", accountId: accA.id, dueDate: new Date(Date.now() + 2 * 86400000), source: "manual" },
-  });
-  created.bills.push(projBill.id);
-  const projection = await buildCashFlowProjection({ horizonDays: 30 });
-  const foundInTimeline = projection.timeline.some((e) => e.label === projBill.description);
-  check("Projeção: Bill temporária aparece na timeline de 30 dias", foundInTimeline);
+  // Fase 5.4F — REMOVIDO: este teste chamava lib/cashFlowProjection.js (V1),
+  // deletado nesta fase (zero caller real restante — ver FINAL_V1_CALLER_MAP
+  // do relatório). Cobertura equivalente já existe em V2:
+  // scripts/test-financial-engine-integration.mjs, seção 9 ("financialStatus
+  // — smoke test das 4 regras") cria uma Bill real e confirma que
+  // buildBaseProjection/buildExpectedProjection/buildStressProjection a
+  // incorporam corretamente (o status financeiro escala pra CRITICO
+  // especificamente por causa dessa Bill entrar na projeção — só é possível
+  // se a Bill estiver na timeline). Não duplicado aqui de propósito.
 }
 
 let exitCode = 0;

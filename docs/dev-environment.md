@@ -153,7 +153,12 @@ por você:
    atual (que hoje é o de produção), e adicionar `DATABASE_ENV=development` (já vem
    no `.env.example`) — sem essa variável, qualquer script de teste futuro se recusa
    a rodar (item 3 acima, fail closed).
-5. Rodar `node scripts/audit.js` uma vez pra confirmar que o `.env` novo está
+5. Copiar também a connection string **não-pooled** (mesmo painel **Connect**, sem
+   `-pooler` no host) pro `DIRECT_URL` do `.env` — `prisma/schema.prisma` exige essa
+   variável separada pra `prisma migrate`/`db push` (Postgres em modo pooled não
+   garante os comandos de sessão que Migrate precisa). Faltava no `.env.example`
+   até a Fase 5.4F; corrigido lá.
+6. Rodar `node scripts/audit.js` uma vez pra confirmar que o `.env` novo está
    funcionando (vai mostrar os mesmos dados de hoje, já que o branch acabou de ser
    copiado — a partir daí os dois branches divergem conforme você usa cada um).
 

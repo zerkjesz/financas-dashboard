@@ -9,7 +9,6 @@ assertTestEnvironment();
 import { prisma } from "../lib/prisma.js";
 import { money, compareMoney, serializeMoney } from "../lib/money.js";
 import { buildProductFinancialSnapshot } from "../lib/productFinancialSnapshot.js";
-import { buildIndicators } from "../lib/indicators.js";
 import { buildBaseProjection } from "../lib/financialProjection.js";
 
 const targets = JSON.parse(readFileSync(new URL("./fase53a-targets.local.json", import.meta.url)));
@@ -50,7 +49,6 @@ async function main() {
 
   // --- item 35: os payloads que o PRODUTO realmente consome (não uma cópia) ---
   const snapshot = await buildProductFinancialSnapshot({ now });
-  const indicators = await buildIndicators();
 
   console.log("--- Product read model vs. targets canônicos ---");
   eq(snapshot.liquidity.unrestrictedCash, targets.unrestrictedCash, "financial.liquidity.unrestrictedCash");
@@ -88,12 +86,15 @@ async function main() {
     `${serializeMoney(decompositionSum)} === ${serializeMoney(snapshot.futureObligations.amount)}`
   );
 
-  // --- item 14: indicators migrado, mesmo número do dashboard, nunca mais um cálculo paralelo ---
-  const engineCommittedPercent = snapshot.nextIncomeCommitment.baseCommittedPercent.toNumber();
-  check(
-    Math.abs(indicators.percentualSalarioComprometido - Math.round(engineCommittedPercent * 10) / 10) < 0.05,
-    "indicators.percentualSalarioComprometido === financial.nextIncomeCommitment.baseCommittedPercent (mesmo número, uma fonte só)"
-  );
+  // --- item 14 (Fase 5.3B) — REMOVIDO na Fase 5.4F: comparava
+  // lib/indicators.js (V1, deletado — zero caller real restante: seu único
+  // consumidor de UI, IndicadoresView.jsx/rota /metas, foi removido no mesmo
+  // corte, ver METAS_FINAL_DECISION do relatório) contra
+  // financial.nextIncomeCommitment.baseCommittedPercent. Testava uma
+  // superfície que não existe mais — obsoleto por construção, não por
+  // conveniência. O valor canônico em si (baseCommittedPercent) continua
+  // coberto por scripts/test-financial-engine-integration.mjs (seção
+  // nextIncomeCommitment, item 18).
 
   // --- item 16: AFTER_NEXT_INCOME na projeção V2 — as 5 garantias ---
   console.log("\n--- AFTER_NEXT_INCOME projection guarantees (item 16) ---");

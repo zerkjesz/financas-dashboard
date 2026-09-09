@@ -28,12 +28,14 @@ import { selectCriticalBannerReason } from "@/lib/homePresentation";
 //   5. Pra onde foi o dinheiro? -> SpendingSection
 //   6. Como fico? (30/60/90)  -> ProjectionSummary
 //
-// Removidos da Home nesta fase (LEGACY_HOME_CALLER_REMOVED — arquivos
-// preservados, só deixam de ser renderizados; ver relatório da fase pro
-// HOME_LEGACY_COMPONENT_MAP completo): AlertsPanel, BalanceCards,
-// CardsSection, ValeAlimentacaoCard, UpcomingObligations, IntelligenceSummary,
-// CategoryBreakdown/TopExpenses antigos (substituídos por SpendingSection),
-// TransactionsTable completa (70+ linhas — Histórico ainda não existe, 5.4D).
+// Removidos da Home na Fase 5.4C (LEGACY_HOME_CALLER_REMOVED — arquivos só
+// deixaram de ser renderizados) e DELETADOS na Fase 5.4F após confirmação
+// de zero-caller real (grep completo, nenhum import fora do próprio arquivo
+// de definição — ver DEAD_COMPONENT_AUDIT do relatório da fase): AlertsPanel,
+// BalanceCards, CardsSection, ValeAlimentacaoCard, UpcomingObligations,
+// IntelligenceSummary, CategoryBreakdown/TopExpenses antigos (substituídos
+// por SpendingSection), TransactionsTable completa (70+ linhas — Histórico
+// tem os próprios componentes agora, história/*.jsx).
 //
 // Nenhum cálculo financeiro novo: todo número vem de `data.financial`
 // (lib/productFinancialSnapshot.js) ou de `data.cards`/`cycleEntries`

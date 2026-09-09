@@ -268,12 +268,12 @@ model ConfirmedCommitment {
 ```
 
 ### Lifecycle completo, com o exemplo que você deu (Itaú R$8.730, Reserva
-Importação R$7.000, Tattoo R$2.465)
+Importação R$7.000, Procedimento R$2.465)
 
 **Estado A — `confirmed`, sem funding.**
 ```
 protectedMoney (Importação)  = 7.000,00
-confirmedCommitments (Tattoo) = 2.465,00
+confirmedCommitments (Procedimento) = 2.465,00
 
 freeMoney = unrestrictedCash − protectedMoney − confirmedCommitments
           = 8.730,00 − 7.000,00 − 2.465,00 = R$ −735,00
@@ -291,12 +291,12 @@ juntos: `ConfirmedCommitment.status → "funded"`, `fundingSourceType: "reserve"
 
 ```
 protectedMoney (Importação) = 7.000,00 − 2.465,00 = 4.535,00
-confirmedCommitments (Tattoo, ainda não settled) = 2.465,00 (continua contando — só muda de "de onde vem")
+confirmedCommitments (Procedimento, ainda não settled) = 2.465,00 (continua contando — só muda de "de onde vem")
 
 freeMoney = 8.730,00 − 4.535,00 − 2.465,00 = R$ 1.730,00
 ```
 O mesmo dinheiro não foi subtraído duas vezes: a reserva encolheu exatamente pelo
-valor que passou a estar "reservado especificamente pro Tattoo dentro do que era
+valor que passou a estar "reservado especificamente pro Procedimento dentro do que era
 Importação", e o compromisso continua contando uma vez só. **`funded` nunca cria o
 `ReserveMovement` sozinho por trás — é uma ação explícita do usuário, as duas coisas
 acontecem juntas deliberadamente, nunca automaticamente por inferência.**
@@ -536,17 +536,17 @@ hoje). É esse valor que alimenta `classifyConfirmedCommitment` (seção 7).
 
 Exemplo completo (retomando o Estado A do lifecycle da seção 5, com os outros
 componentes do exemplo original também presentes; supondo que o `dueDate` do
-Tattoo caia ANTES da próxima renda — regra B se aplica mesmo sem funding):
+Procedimento caia ANTES da próxima renda — regra B se aplica mesmo sem funding):
 
 ```
 unrestrictedCash                                    R$ 8.730,47
 protectedMoney (Importação)                         R$ 7.000,00
 incurredLiabilities (fatura R$716,97 + luz R$200)   R$   916,97
-confirmedCommitments (Tattoo, dueDate <= nextIncomeDate — regra B)  R$ 2.465,00
+confirmedCommitments (Procedimento, dueDate <= nextIncomeDate — regra B)  R$ 2.465,00
 
 freeMoney = 8.730,47 − 7.000,00 − 916,97 − 2.465,00 = R$ −1.651,50
 safeToSpend (margem 10%)                            = R$ 0,00
-freeMoneyWorstCase (Tiger, max R$2.000)              = −1.651,50 − 2.000,00 = R$ −3.651,50
+freeMoneyWorstCase (Imprevisto, max R$2.000)              = −1.651,50 − 2.000,00 = R$ −3.651,50
 ```
 
 Toda a aritmética acima, na implementação real, roda em `Decimal` (`addMoney`/
@@ -555,7 +555,7 @@ Toda a aritmética acima, na implementação real, roda em `Decimal` (`addMoney`
 
 ### Contraste — regras B, C e "future" lado a lado
 
-Mesmo Tattoo (R$2.465), três cenários diferentes de data/funding, mostrando a
+Mesmo Procedimento (R$2.465), três cenários diferentes de data/funding, mostrando a
 régua completa:
 
 ```
@@ -650,7 +650,7 @@ quando entrarmos na fase de implementação de segurança.
 ## Testes formalizados nesta rodada
 
 - **`freeMoney` não muda entre `funded` e `settled`** (seção 5, Estado B → C) —
-  teste unitário puro: monta o cenário do Tattoo em memória, calcula `freeMoney`
+  teste unitário puro: monta o cenário do Procedimento em memória, calcula `freeMoney`
   nos dois estados, afirma que são iguais. É a prova automatizada de que o
   lifecycle de `ConfirmedCommitment`/`Reserve` não gera dupla contagem.
 - **`classifyConfirmedCommitment`** (seção 7) — os 4 casos listados ali (regra B

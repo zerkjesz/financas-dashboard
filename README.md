@@ -100,13 +100,22 @@ curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
 
 ## Estrutura
 
-- `prisma/schema.prisma` — modelo `Transaction`
-- `lib/parseTransaction.js` — interpreta a mensagem de texto livre (valor, tipo, categoria, pagamento, recorrência)
+> Nota (Fase 5.4F): esta seção descrevia um modelo `Transaction` único que não
+> existe mais — o schema migrou pra modelos canônicos separados (`Income`,
+> `Expense`, `Transfer`, `Purchase`/`Installment`, `Card`/`CardBill`,
+> `ConfirmedCommitment`, `Contingency`, `ExternalInstallmentPlan`, `Reserve`,
+> `Goal`, entre outros — ver `prisma/schema.prisma`). O histórico anterior à
+> migração continua acessível, congelado e somente-leitura, no modelo
+> `LegacyTransaction`. Esta seção documenta setup local; não tenta listar a
+> arquitetura completa (ver `docs/` pro racional de cada fase).
+
+- `prisma/schema.prisma` — modelos financeiros canônicos + `LegacyTransaction` (histórico pré-migração, somente leitura)
+- `lib/parseTransaction.js` — interpreta a mensagem de texto livre (valor, tipo, categoria, pagamento, recorrência); alimenta o pipeline atual via `lib/commitBotIntent.js`
 - `lib/processTelegramMessage.js` — lógica compartilhada entre o bot local e o webhook hospedado
 - `bot/telegram-bot.js` — bot local (polling), usado em dev
 - `app/api/telegram/webhook/route.js` — bot hospedado (webhook), usado em produção
-- `app/` — dashboard (Next.js App Router)
-- `app/api/transactions/` — API REST usada pelo dashboard (GET/POST/PATCH/DELETE)
+- `app/` — dashboard (Next.js App Router): Home (`/`), Cartão, Compromissos, Fluxo, Histórico, Simulador
+- `app/api/transactions/` — leitura do histórico `LegacyTransaction` (pré-migração); lançamentos novos usam `/api/incomes`, `/api/expenses`, `/api/transfers`, `/api/purchases` etc.
 
 ## Próximos passos possíveis
 

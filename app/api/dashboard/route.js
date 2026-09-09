@@ -4,12 +4,9 @@ import { listAccountsWithBalances } from "@/lib/accounts";
 import { listCardsWithLimits } from "@/lib/cards";
 import { getCardBillView } from "@/lib/cardBillCalculator";
 import { getCardCycleForDate } from "@/lib/cardCycle";
-import { buildFinancialSummary } from "@/lib/intelligence";
 import { buildVaSnapshot } from "@/lib/vaPanel";
 import { listUpcomingObligations } from "@/lib/upcomingObligations";
 import { listBills } from "@/lib/bills";
-import { buildAlerts } from "@/lib/alerts";
-import { buildCashFlowProjection } from "@/lib/cashFlowProjection";
 import { computeUnrestrictedCash } from "@/lib/unrestrictedCash";
 import { buildProductFinancialSnapshot } from "@/lib/productFinancialSnapshot";
 import { getAppSettings } from "@/lib/settings";
@@ -20,27 +17,30 @@ export async function GET() {
   const now = new Date();
 
   // Saldo/limite de contas e cartões é a parte mais pesada (várias queries por conta/cartão)
-  // e é usada em quase tudo abaixo — calcula uma vez só e reaproveita, em vez de deixar
-  // intelligence/alerts/cash-flow recalcularem cada um por conta própria.
+  // e é usada em quase tudo abaixo — calcula uma vez só e reaproveita.
   const [accounts, cardsBase, settings] = await Promise.all([listAccountsWithBalances(), listCardsWithLimits(), getAppSettings()]);
-  const projection30 = await buildCashFlowProjection({ horizonDays: 30, accounts, cards: cardsBase });
 
-  // Fase 5.3B — bloco canônico ADICIONAL (progressive migration, não big-bang):
-  // `financial` vem 100% de lib/productFinancialSnapshot.js, que compõe os
-  // helpers canônicos (financialEngine/freeMoney/obligationClassifier) — a
-  // MESMA verdade financeira reconciliada nas Fases 5.1D-5.2D. O payload legado
-  // abaixo (`intelligence`, `balances`, etc.) é mantido intacto pros
-  // componentes que ainda não migraram.
+  // Fase 5.3B — bloco canônico: `financial` vem 100% de
+  // lib/productFinancialSnapshot.js, que compõe os helpers canônicos
+  // (financialEngine/freeMoney/obligationClassifier) — a MESMA verdade
+  // financeira reconciliada nas Fases 5.1D-5.2D.
+  //
+  // Fase 5.4F — REMOVIDO: `intelligence` (lib/intelligence.js) e `alerts`
+  // (lib/alerts.js), junto com o `buildCashFlowProjection` que só existia
+  // pra alimentar os dois. Confirmado por grep completo (FINAL_V1_CALLER_MAP
+  // do relatório da fase): nenhum componente ativo lia `data.intelligence`
+  // ou `data.alerts` deste payload — eram computados em toda request e
+  // nunca renderizados. `/api/intelligence` e `/api/alerts` (rotas standalone
+  // que também expunham esses mesmos builders) também tinham zero caller e
+  // foram removidas junto.
   const financial = await buildProductFinancialSnapshot({ now });
 
-  const [incomes, expenses, intelligence, vaSnapshot, upcomingObligations, pendingBills, alerts] = await Promise.all([
+  const [incomes, expenses, vaSnapshot, upcomingObligations, pendingBills] = await Promise.all([
     prisma.income.findMany({ include: { account: true }, orderBy: { occurredAt: "desc" } }),
     prisma.expense.findMany({ include: { account: true, card: true }, orderBy: { occurredAt: "desc" } }),
-    buildFinancialSummary({ accounts, cards: cardsBase, projection30 }),
     buildVaSnapshot(),
     listUpcomingObligations({ cards: cardsBase, productSnapshot: financial }),
     listBills({ status: ["pending", "overdue"] }),
-    buildAlerts({ projection30, productSnapshot: financial }),
   ]);
 
   // Fase 4.0: ciclo real de CADA cartão (closingDay-aware) — antes era um "mês
@@ -100,11 +100,9 @@ export async function GET() {
     accounts,
     cards,
     entries,
-    intelligence,
     vaSnapshot,
     upcomingObligations,
     pendingBills,
-    alerts,
     financial,
     financialCycle,
     balances: {
