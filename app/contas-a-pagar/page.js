@@ -1,12 +1,8 @@
-import ContasAPagarView from "./ContasAPagarView.jsx";
-import FluxoCaixaView from "../fluxo-caixa/FluxoCaixaView.jsx";
-import PageContainer from "../components/ui/PageContainer.jsx";
+import { redirect } from "next/navigation";
 
+// Fase 5.4D — "Contas & Fluxo" se divide em duas tarefas reais: Compromissos
+// (CRUD de Bill + visão de obrigações, esta rota) e Fluxo (só projeção,
+// /fluxo). Redirect preservado — nenhum link/bookmark antigo quebra.
 export default function Page() {
-  return (
-    <PageContainer spaced>
-      <ContasAPagarView />
-      <FluxoCaixaView />
-    </PageContainer>
-  );
+  redirect("/compromissos");
 }

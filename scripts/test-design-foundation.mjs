@@ -28,13 +28,21 @@ console.log("--- Fase 5.4B: Design Foundation ---\n");
 // ==========================================================================
 // 1) Nav config — comportamento, não snapshot.
 // ==========================================================================
-check(NAV_ITEMS.length === 5, "NAV_ITEMS tem as 5 rotas reais de hoje (nenhuma antecipada)", `${NAV_ITEMS.length}`);
+// Fase 5.4D, item 6 — NAV_ITEMS cresceu de 5 pra 7 rotas reais (Compromissos/
+// Fluxo/Histórico), e "Mais" passou de 1 item (só Metas) pra 3 (Fluxo/
+// Histórico/Metas) — mudança intencional e aprovada desta fase, não um
+// achado stale. Asserções abaixo atualizadas pra refletir a nav real de
+// agora (nunca reintroduzir a contagem antiga da 5.4B como se fosse bug).
+check(NAV_ITEMS.length === 7, "NAV_ITEMS tem as 7 rotas reais de hoje (Fase 5.4D)", `${NAV_ITEMS.length}`);
 check(NAV_ITEMS.every((i) => i.href && i.label && i.mobileLabel && i.icon), "todo NAV_ITEM tem href/label/mobileLabel/icon");
-check(MOBILE_PRIMARY_ITEMS.length === 4, "item 24: exatamente 4 itens primários na bottom nav (Hoje/Cartão/Contas/Simular)", `${MOBILE_PRIMARY_ITEMS.length}`);
-check(MOBILE_MORE_ITEMS.length === 1 && MOBILE_MORE_ITEMS[0].key === "metas", "item 24: Metas é o único item dentro de 'Mais' hoje");
+check(MOBILE_PRIMARY_ITEMS.length === 4, "item 24: exatamente 4 itens primários na bottom nav (Hoje/Cartão/Compromissos/Simular)", `${MOBILE_PRIMARY_ITEMS.length}`);
 check(
-  MOBILE_PRIMARY_ITEMS.map((i) => i.key).join(",") === "home,cartoes,contas,simulador",
-  "ordem da bottom nav é Hoje→Cartão→Contas→Simular"
+  MOBILE_MORE_ITEMS.length === 3 && MOBILE_MORE_ITEMS.map((i) => i.key).join(",") === "fluxo,historico,metas",
+  "Fase 5.4D: Fluxo/Histórico/Metas dentro de 'Mais'"
+);
+check(
+  MOBILE_PRIMARY_ITEMS.map((i) => i.key).join(",") === "home,cartoes,compromissos,simulador",
+  "ordem da bottom nav é Hoje→Cartão→Compromissos→Simular"
 );
 
 check(isNavItemActive({ href: "/" }, "/"), "'/' ativo em '/'");
