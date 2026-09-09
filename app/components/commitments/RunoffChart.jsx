@@ -9,15 +9,23 @@ import { formatMoney } from "@/lib/formatMoney";
 // tem data exata pra planos AFTER_NEXT_INCOME, inventar uma seria mentir).
 // Valor SEMPRE visível como texto (nunca só em tooltip de hover — item 24).
 //
-// BUG REAL corrigido nesta fase (achado ao vivo em 390px): com muitos planos
-// ativos (11 offsets no dado real), colunas lado a lado (`flex-1`) nunca
-// cabem — cada uma tem uma largura mínima de conteúdo (label "termina: X, Y")
-// que soma bem mais que 358px, e vira overflow real (898px medido), não
-// "cabe apertado". Corrigido com troca de orientação por breakpoint —
-// MESMO dado, sem lib de gráfico nova: barras verticais lado a lado a partir
-// de `sm` (poucos offsets cabem numa tela maior), linhas com barra
-// horizontal empilhadas verticalmente abaixo de `sm` (nunca estoura largura,
-// só cresce em altura — item 24, "não criar horizontal scroll infinito").
+// BUG REAL corrigido na 5.4D (achado ao vivo em 390px): com muitos planos
+// ativos (11 offsets no dado real), colunas lado a lado nunca cabem em
+// mobile — corrigido com troca de orientação por breakpoint: barras
+// verticais lado a lado numa tela larga, linhas com barra horizontal
+// empilhadas verticalmente numa tela estreita (nunca estoura largura, só
+// cresce em altura — item 24, "não criar horizontal scroll infinito").
+//
+// BUG REAL corrigido na 5.4D.1.1 (achado ao vivo em 768px E 1024px, medido
+// via scrollWidth/clientWidth): o corte estava em `sm` (640px), mas 11
+// colunas de 80px + gaps somam ~1000px — só cabem sem overflow a partir de
+// ~1280px (medido: 1024px overflowing=true, scrollWidth 1000 > clientWidth
+// 920; 1280px overflowing=false, 1056=1056). `sm:flex` deixava 640-1023px
+// inteiro (incluindo 768, onde o nav já foi corrigido duas vezes por esse
+// mesmo tipo de erro de breakpoint) com um `overflow-x-auto` ativo — um
+// "horizontal scroll trap" de verdade, exatamente o que o item 24 proíbe.
+// Corte movido pra `xl` (1280px, breakpoint padrão do Tailwind, não um
+// valor inventado) — linhas seguras cobrem 768/1024 inteiros agora.
 export default function RunoffChart({ runoff }) {
   if (!runoff || runoff.length === 0) return null;
   const max = Math.max(...runoff.map((r) => Number(r.monthTotal)), 1);
@@ -29,15 +37,17 @@ export default function RunoffChart({ runoff }) {
         Uma parcela de cada plano ativo por ocorrência de renda — não são datas de calendário, é posição.
       </p>
 
-      {/* Mobile (< sm): linhas empilhadas, barra horizontal — nunca estoura largura. */}
-      <div className="flex flex-col gap-3 sm:hidden">
+      {/* < xl: linhas empilhadas, barra horizontal — nunca estoura largura,
+          nem em 768/1024 (medido — ver comentário acima). */}
+      <div className="flex flex-col gap-3 xl:hidden">
         {runoff.map((row) => (
           <RunoffRow key={row.offset} row={row} max={max} />
         ))}
       </div>
 
-      {/* sm+: colunas lado a lado — a forma "degraus descendentes" fica visível de cara. */}
-      <div className="hidden sm:flex items-end gap-3 overflow-x-auto" style={{ minHeight: "140px" }}>
+      {/* xl+ (1280px, verificado sem overflow): colunas lado a lado — a
+          forma "degraus descendentes" fica visível de cara. */}
+      <div className="hidden xl:flex items-end gap-3 overflow-x-auto" style={{ minHeight: "140px" }}>
         {runoff.map((row) => (
           <RunoffColumn key={row.offset} row={row} max={max} />
         ))}
@@ -54,8 +64,15 @@ function RunoffColumn({ row, max }) {
   const heightPct = max > 0 ? (Number(row.monthTotal) / max) * 100 : 0;
   const isTerminal = row.activePlanCount === 0;
   return (
-    <div className="flex w-16 shrink-0 flex-col items-center gap-1.5">
-      <span className={`tabular text-xs font-medium ${isTerminal ? "text-text-muted" : "text-text-primary"}`}>{isTerminal ? "R$ 0" : formatMoney(row.monthTotal)}</span>
+    <div className="flex w-20 shrink-0 flex-col items-center gap-1.5">
+      {/* Fase 5.4D.1.1 — BUG REAL corrigido (medido ao vivo, 1280px): este
+          span não tinha `w-full`/`text-center` — "R$ 1.472,09" media 79px
+          de largura própria contra uma coluna de 64px, vazando ~7,6px pra
+          cada lado (confirmado via getBoundingClientRect). Coluna alargada
+          pra 80px (w-20) + `w-full text-center` como defesa: cabe numa
+          linha só no caso comum, e nunca mais overflow se algum valor
+          futuro for mais largo ainda (quebra dentro da própria coluna). */}
+      <span className={`w-full tabular text-center text-xs font-medium ${isTerminal ? "text-text-muted" : "text-text-primary"}`}>{isTerminal ? "R$ 0" : formatMoney(row.monthTotal)}</span>
       <div className="flex h-24 w-full items-end">
         <div
           className={`w-full rounded-t-control transition-all ${isTerminal ? "bg-surface-2" : "bg-restricted"}`}
