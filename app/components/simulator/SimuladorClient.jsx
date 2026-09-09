@@ -76,10 +76,36 @@ export default function SimuladorClient() {
             setFromContext({ cardId: cardIdParam });
           }
         } else if (scenarioParam === "risk") {
-          const contingencyExists = contingencyIdParam && contingencyList.some((c) => c.id === contingencyIdParam);
+          const contingency = contingencyIdParam ? contingencyList.find((c) => c.id === contingencyIdParam) : null;
           setScenarioType("CONTINGENCY_REALIZATION");
-          if (contingencyExists) {
-            setForm((f) => ({ ...f, contingencyId: contingencyIdParam }));
+          if (contingency) {
+            // Fase 5.4E.1, item 26/27/28 (CRÍTICO) — entrada contextual NUNCA
+            // decide silenciosamente por escolhas ambíguas do risco real:
+            // se o risco tem expectedAmount E maxAmount (dois valores
+            // válidos e diferentes — ex: um risco com R$1.000 esperado vs
+            // R$2.000 máximo, 2x de diferença), o form chega SEM valor
+            // pré-selecionado, forçando escolha consciente (ScenarioForm
+            // mostra um placeholder real + required, nunca um dos dois
+            // silenciosamente marcado). Mesma lógica pra timing: se
+            // expectedDate é null (timing desconhecido — caso real e comum
+            // em riscos recém-cadastrados), NUNCA assume "Agora" — força
+            // escolha explícita. Só pré-seleciona quando não há ambiguidade
+            // de verdade (ex: só existe expectedAmount, sem maxAmount — nesse
+            // caso não há segunda opção real pra esconder).
+            const amountAmbiguous = contingency.expectedAmount != null && contingency.maxAmount != null && contingency.expectedAmount !== contingency.maxAmount;
+            const timingAmbiguous = !contingency.expectedDate;
+            setForm((f) => ({
+              ...f,
+              contingencyId: contingencyIdParam,
+              amountField: amountAmbiguous ? "" : contingency.expectedAmount != null ? "expected" : "max",
+              // "AMBIGUOUS" é um sentinel distinto de "" — "" já significa
+              // "usuário escolheu Data específica, ainda não digitou a
+              // data" (comportamento pré-existente do <input type="date">).
+              // Precisam ser estados diferentes: um é decisão pendente
+              // (nunca vista pelo usuário), o outro é formulário incompleto
+              // no meio do preenchimento normal.
+              timing: timingAmbiguous ? "AMBIGUOUS" : f.timing,
+            }));
             setFromContext({ contingencyId: contingencyIdParam });
           }
         }

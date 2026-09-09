@@ -75,23 +75,45 @@ export default function ScenarioForm({ scenarioType, form, onChange, cards, cont
             )}
             {fromContext?.contingencyId && <p className="text-caption text-accent mt-1">simulando este risco</p>}
           </div>
+          {/* Fase 5.4E.1, item 26/27/28 (CRÍTICO) — ambiguity audit da
+              entrada contextual: quando o risco selecionado tem
+              expected E máximo diferentes, o valor NUNCA chega pré-marcado
+              (SimuladorClient.jsx deixa form.amountField = "" nesse caso) —
+              o <select> mostra um placeholder real ("Escolha um valor"),
+              `required`, e uma legenda explícita explica a decisão. Mesma
+              lógica pra timing quando o risco não tem expectedDate
+              conhecido: NUNCA assume "Agora" silenciosamente. */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-caption text-text-muted mb-1 block">Valor</label>
-              <Select value={form.amountField} onChange={(e) => set("amountField", e.target.value)}>
+              <Select value={form.amountField} onChange={(e) => set("amountField", e.target.value)} required>
+                {form.amountField === "" && <option value="">Escolha um valor</option>}
                 <option value="expected">Esperado</option>
                 <option value="max">Máximo</option>
               </Select>
             </div>
             <div>
               <label className="text-caption text-text-muted mb-1 block">Quando?</label>
-              <Select value={form.timing === "NOW" ? "NOW" : "DATE"} onChange={(e) => set("timing", e.target.value === "NOW" ? "NOW" : "")}>
+              <Select
+                value={form.timing === "AMBIGUOUS" ? "" : form.timing === "NOW" ? "NOW" : "DATE"}
+                onChange={(e) => set("timing", e.target.value === "NOW" ? "NOW" : "")}
+                required
+              >
+                {form.timing === "AMBIGUOUS" && <option value="">Escolha quando</option>}
                 <option value="NOW">Agora</option>
                 <option value="DATE">Data específica</option>
               </Select>
             </div>
           </div>
-          {form.timing !== "NOW" && (
+          {form.amountField === "" && (
+            <p className="text-caption text-warning">
+              Este risco tem dois valores possíveis (esperado e máximo) — escolha qual simular, nenhum dos dois é "o valor certo".
+            </p>
+          )}
+          {form.timing === "AMBIGUOUS" && (
+            <p className="text-caption text-warning">Quando isso aconteceria? Este risco não tem uma data conhecida — escolha um cenário de tempo.</p>
+          )}
+          {form.timing !== "NOW" && form.timing !== "AMBIGUOUS" && (
             <div>
               <label className="text-caption text-text-muted mb-1 block">Data</label>
               {/* BUG REAL corrigido (achado ao vivo): a versão anterior convertia

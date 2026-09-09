@@ -4,6 +4,7 @@ import { CircleDashed } from "lucide-react";
 import { formatMoney, formatDate } from "@/lib/formatMoney";
 import Badge from "../ui/Badge.jsx";
 import Disclosure from "../ui/Disclosure.jsx";
+import HypotheticalAmbientSurface from "./HypotheticalAmbientSurface.jsx";
 import { STATUS_COPY, VERDICT_COPY, FEASIBILITY_COPY, safetyBodyCopy, PROJECTION_CHECKPOINTS } from "@/lib/simulatorPresentation";
 
 const VERDICT_TEXT_CLASS = { positive: "text-positive", warning: "text-warning", danger: "text-danger" };
@@ -21,6 +22,13 @@ export default function ResultPanel({ result }) {
 
   return (
     <div className="relative overflow-hidden rounded-card bg-surface-2 p-6 sm:p-7">
+      {/* Fase 5.4E.1 — assinatura visual do cenário simulado (item 4/24):
+          atmosfera extremamente sutil, progressive enhancement (item 11) —
+          sem isso, o painel continua idêntico ao de 5.4E, 100% funcional.
+          Fica ANTES do hairline/label na ordem do DOM só por organização;
+          z-index:-1 embutido no próprio componente garante que renderiza
+          atrás de tudo, nunca por cima do texto (item 8). */}
+      <HypotheticalAmbientSurface />
       <div className="absolute inset-x-0 top-0 h-[3px] bg-hypothetical/70" aria-hidden="true" />
 
       <div className="flex items-center gap-2 mb-1">
