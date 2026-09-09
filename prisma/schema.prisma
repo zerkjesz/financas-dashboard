@@ -681,6 +681,26 @@ model TelegramUpdateReceipt {
   @@index([status, claimedAt])
 }
 
+// Fase 5.5 — enforcement autoritativo do rate limit de /api/auth/login,
+// substituindo o contador só-em-cookie (lib/auth/rateLimit.js, Fase 5.3C —
+// client-resettable: um cliente que não envia/limpa o cookie reiniciava a
+// contagem a zero, achado explícito da Fase 5.4F.1). Estado agora vive
+// AQUI (Postgres, mesmo banco de tudo — zero provider novo, zero
+// credencial nova, já coberto pelo dev/prod DB boundary existente),
+// nunca no cliente. `key` é HMAC-SHA256(scope + IP, SESSION_SECRET) —
+// nunca o IP em texto puro (privacidade — item 10 da fase). Increment é
+// sempre via `INSERT ... ON CONFLICT DO UPDATE SET count = count + 1`
+// (uma única instrução SQL, atômica por construção do Postgres — nunca
+// read-then-write separado, que teria race condition sob concorrência).
+// Nenhum dado financeiro, nenhum dado pessoal identificável em texto puro.
+model LoginRateLimit {
+  key          String    @id
+  count        Int       @default(0)
+  windowStart  DateTime  @default(now())
+  blockedUntil DateTime?
+  updatedAt    DateTime  @updatedAt
+}
+
 model LegacyTransaction {
   id                 String   @id @default(cuid())
   type               String
