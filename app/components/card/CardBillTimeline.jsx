@@ -29,18 +29,25 @@ export default function CardBillTimeline({ next, later }) {
       {later.length > 0 && (
         <Disclosure summary={`ver todas as faturas (${later.length} mais)`} className="mt-4 border-t border-border-subtle pt-3">
           <div className="divide-y divide-border-subtle pt-1">
-            {later.map((bill) => (
-              <div key={bill.cycleMonth} className="flex items-center justify-between gap-3 py-2 text-sm">
-                <div className="min-w-0">
-                  <div className="text-text-secondary">{bill.cycleMonth}</div>
-                  <div className="text-caption text-text-muted">vence {formatDate(bill.dueAt)}</div>
+            {later.map((bill) => {
+              // Item "future cycles: mínimo peso" — ciclo com valor EXATAMENTE
+              // zero (fato objetivo, nunca um limiar inventado) recebe menos
+              // peso visual: nunca compete com uma fatura que já tem valor
+              // real conhecido.
+              const isZero = Number(bill.totalAmount) === 0;
+              return (
+                <div key={bill.cycleMonth} className={`flex items-center justify-between gap-3 py-2 text-sm ${isZero ? "opacity-50" : ""}`}>
+                  <div className="min-w-0">
+                    <div className="text-text-secondary">{bill.cycleMonth}</div>
+                    <div className="text-caption text-text-muted">vence {formatDate(bill.dueAt)}</div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="tabular text-text-primary">{formatMoney(bill.totalAmount)}</span>
+                    <Badge variant={CARD_BILL_STATUS_BADGE_VARIANT[bill.status] || "neutral"}>{CARD_BILL_STATUS_LABEL[bill.status] || bill.status}</Badge>
+                  </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <span className="tabular text-text-primary">{formatMoney(bill.totalAmount)}</span>
-                  <Badge variant={CARD_BILL_STATUS_BADGE_VARIANT[bill.status] || "neutral"}>{CARD_BILL_STATUS_LABEL[bill.status] || bill.status}</Badge>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </Disclosure>
       )}

@@ -82,9 +82,14 @@ export default function CartoesPage() {
         <CardHero card={card} bill={current || card.currentBill} />
         <CardBillTimeline next={next} later={later} />
         <CardInstallmentsList purchases={purchases} />
-        <div className="rounded-card bg-surface-1 p-6">
-          <CardSettingsForm card={card} onSave={saveSettings} />
-        </div>
+      </div>
+
+      {/* Fase 5.4D.1, item "card wall check" — CORRIGIDO: um `rounded-card`
+          inteiro só pra guardar 1 linha de disclosure colapsada lia como
+          "caixa vazia" (4ª caixa idêntica na pilha). Vira rodapé simples da
+          página, fora do ritmo de `space-y-4` dos blocos de conteúdo. */}
+      <div className="mt-6 border-t border-border-subtle pt-4">
+        <CardSettingsForm card={card} onSave={saveSettings} />
       </div>
     </PageContainer>
   );

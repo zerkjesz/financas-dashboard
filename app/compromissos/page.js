@@ -3,12 +3,12 @@
 import { useEffect, useState } from "react";
 import PageContainer from "../components/ui/PageContainer.jsx";
 import { DashboardSkeleton } from "../components/Skeleton.jsx";
+import CurrentHorizonSection from "../components/commitments/CurrentHorizonSection.jsx";
 import ObligationBucket from "../components/commitments/ObligationBucket.jsx";
 import NextIncomeWindowSection from "../components/commitments/NextIncomeWindowSection.jsx";
 import RunoffChart from "../components/commitments/RunoffChart.jsx";
 import RiskSection from "../components/commitments/RiskSection.jsx";
 import BillsManager from "../components/commitments/BillsManager.jsx";
-import { OBLIGATION_CLASS_LABEL } from "@/lib/commitmentsPresentation";
 
 // Fase 5.4D — COMPROMISSOS responde "o que eu tenho que pagar, quando e com
 // qual grau de certeza?" (item 25). NÃO é uma lista de Prisma models (item
@@ -56,17 +56,11 @@ export default function CompromissosPage() {
       </header>
 
       <div className="space-y-4">
-        <ObligationBucket
-          title={OBLIGATION_CLASS_LABEL.INCURRED_LIABILITY}
-          subtitle="Já reduz seu dinheiro livre hoje."
-          items={incurred}
-          total={currentObligations.incurredLiabilities}
-        />
-        <ObligationBucket
-          title={OBLIGATION_CLASS_LABEL.CURRENT_HORIZON_OBLIGATION}
-          subtitle="Vence antes da próxima renda cair."
-          items={dueBeforeIncome}
-          total={currentObligations.dueBeforeNextIncome}
+        <CurrentHorizonSection
+          incurred={incurred}
+          incurredTotal={currentObligations.incurredLiabilities}
+          dueBeforeIncome={dueBeforeIncome}
+          dueBeforeIncomeTotal={currentObligations.dueBeforeNextIncome}
         />
 
         <NextIncomeWindowSection nextIncomeCommitment={nextIncomeCommitment} nextWindowItems={financial.externalInstallments.nextWindowItems} />

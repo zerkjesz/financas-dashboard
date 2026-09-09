@@ -12,10 +12,17 @@ import { CATEGORY_COLORS } from "@/lib/categoryRules";
 // CHART_LIBRARY_DECISION desta fase foi "nenhuma lib" — bars continuam
 // perfeitamente aceitáveis). Clicar numa categoria filtra a lista abaixo
 // (item 49) — sem reload, é só estado do componente pai.
+//
+// Fase 5.4D.1 — elevado pra `bg-surface-2` (mesmo grau da Home hero/Cartão
+// hero/Compromissos "Horizonte atual"): sem isso, Histórico era 2 caixas
+// `bg-surface-1` do mesmo peso — nenhuma pista de qual é a informação
+// primária (a categoria é o "insight", a lista é o "detalhe" — item 46).
+// Tons internos (track da barra, estado selecionado) descem um degrau
+// (surface-1/surface-3) pra continuar contrastando contra o novo fundo.
 export default function CategoryOverview({ totals, total, selected, onSelect }) {
   if (totals.length === 0) {
     return (
-      <div className="rounded-card bg-surface-1 p-6">
+      <div className="rounded-card bg-surface-2 p-6">
         <h2 className="text-label text-text-muted mb-2">Por categoria</h2>
         <p className="text-body text-text-muted">Nenhum gasto registrado neste ciclo ainda.</p>
       </div>
@@ -23,7 +30,7 @@ export default function CategoryOverview({ totals, total, selected, onSelect }) 
   }
 
   return (
-    <div className="rounded-card bg-surface-1 p-6">
+    <div className="rounded-card bg-surface-2 p-6">
       <h2 className="text-label text-text-muted mb-4">Por categoria (ciclo atual)</h2>
       <div className="space-y-3">
         {totals.map(([category, value]) => {
@@ -35,7 +42,7 @@ export default function CategoryOverview({ totals, total, selected, onSelect }) 
               key={category}
               onClick={() => onSelect(isSelected ? null : category)}
               aria-pressed={isSelected}
-              className={`focus-ring block w-full rounded-control text-left transition-colors cursor-pointer ${isSelected ? "bg-surface-2" : "hover:bg-surface-2/60"} -mx-2 px-2 py-1.5`}
+              className={`focus-ring block w-full rounded-control text-left transition-colors cursor-pointer ${isSelected ? "bg-surface-3" : "hover:bg-surface-3/60"} -mx-2 px-2 py-1.5`}
             >
               <div className="flex items-baseline justify-between mb-1 gap-2">
                 <div className="flex min-w-0 items-center gap-2">
@@ -45,7 +52,7 @@ export default function CategoryOverview({ totals, total, selected, onSelect }) 
                 </div>
                 <span className="tabular shrink-0 text-sm font-medium text-text-primary">{formatMoney(value)}</span>
               </div>
-              <div className="h-1.5 overflow-hidden rounded-pill bg-surface-2">
+              <div className="h-1.5 overflow-hidden rounded-pill bg-surface-1">
                 <div className="h-full rounded-pill" style={{ width: `${total > 0 ? (value / totals[0][1]) * 100 : 0}%`, backgroundColor: color }} />
               </div>
             </button>

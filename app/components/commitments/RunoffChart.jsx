@@ -64,9 +64,14 @@ function RunoffColumn({ row, max }) {
           aria-label={`${row.label}: ${formatMoney(row.monthTotal)}, ${row.activePlanCount} plano(s) ativo(s)`}
         />
       </div>
-      <span className="text-caption text-text-muted text-center leading-tight">{offsetLabel(row)}</span>
+      {/* Fase 5.4D.1 — BUG REAL corrigido (medido ao vivo): sem `w-full`, o
+          <span> cresce pelo conteúdo (nome de plano longo) em vez de
+          respeitar os 64px da coluna — texto vazava até 21px pra dentro das
+          colunas vizinhas (confirmado via getBoundingClientRect). `w-full`
+          força o span a quebrar linha dentro da própria coluna. */}
+      <span className="w-full text-caption text-text-muted text-center leading-tight">{offsetLabel(row)}</span>
       {row.plansFinishingThisOffset.length > 0 && (
-        <span className="text-caption text-restricted text-center leading-tight">termina: {row.plansFinishingThisOffset.join(", ")}</span>
+        <span className="w-full text-caption text-restricted text-center leading-tight">termina: {row.plansFinishingThisOffset.join(", ")}</span>
       )}
     </div>
   );

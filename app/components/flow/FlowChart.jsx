@@ -23,10 +23,18 @@ import { formatMoney, formatDate } from "@/lib/formatMoney";
 // mais estreito) faz o gráfico só ESCALAR PRA CIMA em telas largas — texto
 // crescendo é inofensivo, texto encolhendo abaixo do legível não é.
 const WIDTH = 360;
-const HEIGHT = 160;
+const HEIGHT = 176;
 const PAD_X = 8;
 const PAD_TOP = 14;
-const PAD_BOTTOM = 12;
+const PAD_BOTTOM = 26;
+
+// Fase 5.4D.1, item 41 — eixo/labels: sem ticks, o usuário não conseguia
+// ver ONDE no gráfico ficam os 30/60/90 dias que a seção "Como fico" já
+// mostra em texto — a trajetória e o resumo numérico pareciam desconectados
+// (achado do audit visual, item 34: "enxergar horizonte quase
+// instantaneamente"). Ticks fixos por horizonte (mesmos dias dos
+// checkpoints já exibidos abaixo — nunca um número novo).
+const TICKS_BY_HORIZON = { 7: [0, 7], 30: [0, 15, 30], 60: [0, 30, 60], 90: [0, 30, 60, 90], 180: [0, 60, 120, 180] };
 
 export default function FlowChart({ startingBalance, timeline, horizonDays, projectedBalance }) {
   const points = [
@@ -52,6 +60,8 @@ export default function FlowChart({ startingBalance, timeline, horizonDays, proj
 
   const zeroY = yScale(0);
   const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"} ${xScale(p.day).toFixed(1)} ${yScale(p.value).toFixed(1)}`).join(" ");
+  const ticks = TICKS_BY_HORIZON[horizonDays] || [0, horizonDays];
+  const axisY = HEIGHT - PAD_BOTTOM + 14;
 
   // Zero crossing — primeiro segmento onde o sinal muda, interpolado
   // linearmente (geometria pura, não uma projeção nova).
@@ -95,6 +105,18 @@ export default function FlowChart({ startingBalance, timeline, horizonDays, proj
               </title>
             </circle>
           ))}
+
+        {/* Eixo de dias — tick + label, mesmos dias que "Como fico" mostra
+            em texto abaixo, então a trajetória e o resumo numérico leem
+            como uma coisa só. */}
+        {ticks.map((day) => (
+          <g key={day}>
+            <line x1={xScale(day)} y1={HEIGHT - PAD_BOTTOM} x2={xScale(day)} y2={HEIGHT - PAD_BOTTOM + 4} stroke="var(--color-border-strong)" strokeWidth="1" />
+            <text x={xScale(day)} y={axisY} textAnchor={day === 0 ? "start" : day === horizonDays ? "end" : "middle"} fontSize="10" fill="var(--color-text-muted)">
+              {day === 0 ? "hoje" : `${day}d`}
+            </text>
+          </g>
+        ))}
       </svg>
 
       {crossing && (
