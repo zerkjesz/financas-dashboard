@@ -8,6 +8,7 @@ const LINKS = [
   { href: "/cartoes", label: "Cartões & Parcelas" },
   { href: "/contas-a-pagar", label: "Contas & Fluxo" },
   { href: "/metas", label: "Metas & Indicadores" },
+  { href: "/simulador", label: "Simulador" },
 ];
 
 export default function NavBar() {
