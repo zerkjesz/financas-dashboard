@@ -67,6 +67,11 @@ export default function MobileNav() {
           aria-label="Mais opções"
           className="md:hidden fixed bottom-16 left-0 right-0 z-40 mx-3 mb-2 rounded-card border border-border-subtle bg-surface-2 p-2 safe-area-bottom shadow-lg"
         >
+          {/* Fase 5.4E.1.1 — MEDIDO ao vivo: px-3 py-2.5 dava 40px de hit
+              target real, abaixo de 44px. `pointer-coarse:min-h-11` só em
+              touch — a folha em si já é mobile-only (md:hidden), mas o
+              modificador mantém a mesma disciplina do resto do fix (nunca
+              hardcode de altura fora de pointer-coarse). */}
           {MOBILE_MORE_ITEMS.map((item) => {
             const Icon = item.icon;
             const active = isNavItemActive(item, pathname);
@@ -75,7 +80,7 @@ export default function MobileNav() {
                 key={item.href}
                 href={item.href}
                 aria-current={active ? "page" : undefined}
-                className={`focus-ring flex items-center gap-3 rounded-control px-3 py-2.5 text-sm transition-colors ${
+                className={`focus-ring flex items-center gap-3 rounded-control px-3 py-2.5 text-sm transition-colors pointer-coarse:min-h-11 ${
                   active ? "bg-surface-3 text-text-primary font-semibold" : "text-text-secondary font-medium hover:bg-surface-3"
                 }`}
               >
@@ -86,7 +91,7 @@ export default function MobileNav() {
           })}
           <button
             onClick={handleLogout}
-            className="focus-ring flex w-full items-center gap-3 rounded-control px-3 py-2.5 text-left text-sm font-medium text-text-secondary hover:bg-surface-3 transition-colors cursor-pointer"
+            className="focus-ring flex w-full items-center gap-3 rounded-control px-3 py-2.5 text-left text-sm font-medium text-text-secondary hover:bg-surface-3 transition-colors cursor-pointer pointer-coarse:min-h-11"
           >
             <LogOut className="h-4 w-4 shrink-0" aria-hidden="true" />
             Sair

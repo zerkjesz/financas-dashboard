@@ -200,7 +200,14 @@ export default function SimuladorClient() {
             </div>
           )}
           {(result || fromContext) && (
-            <button type="button" onClick={resetScenario} className="focus-ring text-caption text-text-muted hover:text-text-primary cursor-pointer">
+            // Fase 5.4E.1.1 — MEDIDO ao vivo: 17px real (nem flex, nem
+            // padding). `inline-flex items-center` + `pointer-coarse:min-h-11`
+            // só em touch — texto/cor ficam idênticos em desktop.
+            <button
+              type="button"
+              onClick={resetScenario}
+              className="focus-ring inline-flex items-center text-caption text-text-muted hover:text-text-primary cursor-pointer pointer-coarse:min-h-11"
+            >
               limpar cenário
             </button>
           )}

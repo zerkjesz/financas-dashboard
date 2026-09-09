@@ -56,12 +56,16 @@ export default function BillsManager({ bills, accounts, onChanged }) {
 
       {showForm && <BillForm accounts={accounts} onSubmit={createBill} onCancel={() => setShowForm(false)} />}
 
+      {/* Fase 5.4E.1.1 — MEDIDO ao vivo: px-2.5 py-1 text-xs dava 24-26px de
+          hit target real, bem abaixo de 44px — são filtros independentes
+          (trocam o que a lista mostra), não texto inline. `pointer-coarse:
+          min-h-11` só em touch; visual/densidade em desktop intocados. */}
       <div className="flex flex-wrap gap-1.5 mb-4">
         {STATUS_FILTERS.map((s) => (
           <button
             key={s}
             onClick={() => setStatusFilter(s)}
-            className={`focus-ring rounded-control px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer ${
+            className={`focus-ring inline-flex items-center justify-center rounded-control px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer pointer-coarse:min-h-11 ${
               statusFilter === s ? "bg-surface-2 text-text-primary border border-border-strong" : "text-text-muted hover:text-text-primary hover:bg-surface-2/50"
             }`}
           >

@@ -123,10 +123,14 @@ export default function FinancialHero({ financial }) {
         {suggestSimulate && (
           <div className="mt-5">
             {/* Item 4 — seta tipográfica "→" trocada por ArrowRight (Lucide),
-                mesma linguagem visual do conector de ProjectionSummary. */}
+                mesma linguagem visual do conector de ProjectionSummary.
+                Fase 5.4E.1.1 — MEDIDO ao vivo: 20px de hit target real (sem
+                padding nenhum). É uma ação independente (não link inline
+                dentro de frase), então ganha `pointer-coarse:min-h-11` só
+                em touch — tipografia/cor intocadas, só espaço invisível. */}
             <Link
               href="/simulador"
-              className="focus-ring inline-flex items-center gap-1 rounded-control text-sm font-medium text-accent hover:text-accent-hover transition-colors"
+              className="focus-ring inline-flex items-center gap-1 rounded-control text-sm font-medium text-accent hover:text-accent-hover transition-colors pointer-coarse:min-h-11"
             >
               Simular antes de comprar
               <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />

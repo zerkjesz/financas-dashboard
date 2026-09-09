@@ -38,11 +38,15 @@ export default function CategoryOverview({ totals, total, selected, onSelect }) 
           const pct = total > 0 ? Math.round((value / total) * 100) : 0;
           const isSelected = selected === category;
           return (
+            // Fase 5.4E.1.1 — MEDIDO ao vivo: -mx-2 px-2 py-1.5 dava 43px de
+            // hit target real, 1px abaixo de 44px. `pointer-coarse:min-h-11`
+            // só em touch fecha a diferença sem alterar a densidade em
+            // desktop.
             <button
               key={category}
               onClick={() => onSelect(isSelected ? null : category)}
               aria-pressed={isSelected}
-              className={`focus-ring block w-full rounded-control text-left transition-colors cursor-pointer ${isSelected ? "bg-surface-3" : "hover:bg-surface-3/60"} -mx-2 px-2 py-1.5`}
+              className={`focus-ring block w-full rounded-control text-left transition-colors cursor-pointer pointer-coarse:min-h-11 ${isSelected ? "bg-surface-3" : "hover:bg-surface-3/60"} -mx-2 px-2 py-1.5`}
             >
               <div className="flex items-baseline justify-between mb-1 gap-2">
                 <div className="flex min-w-0 items-center gap-2">
@@ -60,7 +64,10 @@ export default function CategoryOverview({ totals, total, selected, onSelect }) 
         })}
       </div>
       {selected && (
-        <button onClick={() => onSelect(null)} className="focus-ring mt-3 text-caption text-accent hover:text-accent-hover cursor-pointer">
+        <button
+          onClick={() => onSelect(null)}
+          className="focus-ring inline-flex items-center mt-3 text-caption text-accent hover:text-accent-hover cursor-pointer pointer-coarse:min-h-11"
+        >
           limpar filtro
         </button>
       )}

@@ -40,9 +40,12 @@ export default function RiskSection({ contingency }) {
               esperado {item.expectedAmount != null ? formatMoney(item.expectedAmount) : "desconhecido"} · máximo {formatMoney(item.maxAmount)} ·{" "}
               {item.expectedDate ? `previsto ${formatDate(item.expectedDate)}` : "timing desconhecido"}
             </div>
+            {/* Fase 5.4E.1.1 — MEDIDO ao vivo: 20px real. pointer-coarse:min-h-11
+                só em touch, mesma disciplina dos links equivalentes em
+                FinancialHero.jsx/CardHero.jsx. */}
             <Link
               href={`/simulador?scenario=risk&contingencyId=${item.id}`}
-              className="focus-ring inline-flex items-center gap-1 rounded-control text-sm font-medium text-accent hover:text-accent-hover transition-colors"
+              className="focus-ring inline-flex items-center gap-1 rounded-control text-sm font-medium text-accent hover:text-accent-hover transition-colors pointer-coarse:min-h-11"
             >
               Simular este risco
               <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />

@@ -92,9 +92,12 @@ export default function CardHero({ card, bill }) {
           ver SimuladorClient.jsx). Label descritiva e específica deste
           cartão, nunca "Simular" genérico repetido pela tela inteira. */}
       <div className="mt-4 border-t border-border-subtle pt-4">
+        {/* Fase 5.4E.1.1 — MEDIDO ao vivo: 20px real. pointer-coarse:min-h-11
+            só em touch, mesma disciplina do link equivalente em
+            FinancialHero.jsx. */}
         <Link
           href={`/simulador?scenario=card_single&cardId=${card.id}`}
-          className="focus-ring inline-flex items-center gap-1 rounded-control text-sm font-medium text-accent hover:text-accent-hover transition-colors"
+          className="focus-ring inline-flex items-center gap-1 rounded-control text-sm font-medium text-accent hover:text-accent-hover transition-colors pointer-coarse:min-h-11"
         >
           Simular uma compra neste cartão
           <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />

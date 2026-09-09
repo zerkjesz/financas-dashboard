@@ -6,7 +6,12 @@ import { SCENARIO_CONFIG } from "@/lib/simulatorPresentation";
 // Fase 5.4E, item 9 — tabs continuam a melhor interação (poucos itens,
 // mudança de contexto clara). Accent SÓ no estado selecionado (item 26 do
 // pedido geral de accent discipline) — nunca para representar dado
-// financeiro. Touch-friendly (py-2.5 ~ 40px+ de alvo).
+// financeiro.
+//
+// Fase 5.4E.1.1 — MEDIDO ao vivo: py-2.5 dava 42px real, abaixo dos 44px
+// (a estimativa "~40px+" do comentário anterior não tinha medição real por
+// trás). `pointer-coarse:min-h-11` só em touch; seleção/estado visual
+// (accent, border) e a semântica de teclado por seta ficam intocados.
 //
 // BUG REAL corrigido (achado em teste de teclado real, não só dispatchEvent):
 // `role="tablist"`/`role="tab"` promete o padrão ARIA Tabs pra tecnologia
@@ -58,7 +63,7 @@ export default function ScenarioSelector({ value, onChange }) {
             tabIndex={active ? 0 : -1}
             onClick={() => onChange(s.type)}
             onKeyDown={(e) => handleKeyDown(e, i)}
-            className={`focus-ring inline-flex items-center gap-2 rounded-control px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
+            className={`focus-ring inline-flex items-center gap-2 rounded-control px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer pointer-coarse:min-h-11 ${
               active ? "bg-surface-2 text-text-primary border border-accent/40" : "text-text-muted border border-transparent hover:bg-surface-1 hover:text-text-primary"
             }`}
           >

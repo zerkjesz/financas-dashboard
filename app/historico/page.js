@@ -68,8 +68,16 @@ export default function HistoricoPage() {
           <h1 className="text-page-title text-text-primary">Histórico</h1>
           <p className="text-caption text-text-muted">Onde seu dinheiro foi e quais lançamentos explicam isso</p>
         </div>
+        {/* Fase 5.4E.1.1 — MEDIDO ao vivo: p-1.5 em volta de um ícone de
+            16px dava 28×28px real, bem abaixo de 44px — botões icon-only
+            precisam crescer nas DUAS dimensões (min-w + min-h), não só
+            altura. `pointer-coarse:` só em touch. */}
         <div className="flex items-center gap-2">
-          <button onClick={() => setCycleOffset((o) => o - 1)} className="focus-ring rounded-control p-1.5 text-text-muted hover:text-text-primary hover:bg-surface-1 cursor-pointer" aria-label="Ciclo anterior">
+          <button
+            onClick={() => setCycleOffset((o) => o - 1)}
+            className="focus-ring inline-flex items-center justify-center rounded-control p-1.5 text-text-muted hover:text-text-primary hover:bg-surface-1 cursor-pointer pointer-coarse:min-h-11 pointer-coarse:min-w-11"
+            aria-label="Ciclo anterior"
+          >
             <ChevronLeft className="h-4 w-4" aria-hidden="true" />
           </button>
           <span className="text-caption text-text-muted tabular whitespace-nowrap">
@@ -78,7 +86,7 @@ export default function HistoricoPage() {
           <button
             onClick={() => setCycleOffset((o) => Math.min(0, o + 1))}
             disabled={cycleOffset === 0}
-            className="focus-ring rounded-control p-1.5 text-text-muted hover:text-text-primary hover:bg-surface-1 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+            className="focus-ring inline-flex items-center justify-center rounded-control p-1.5 text-text-muted hover:text-text-primary hover:bg-surface-1 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer pointer-coarse:min-h-11 pointer-coarse:min-w-11"
             aria-label="Próximo ciclo"
           >
             <ChevronRight className="h-4 w-4" aria-hidden="true" />

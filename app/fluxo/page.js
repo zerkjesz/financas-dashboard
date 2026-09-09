@@ -37,12 +37,14 @@ export default function FluxoPage() {
           <h1 className="text-page-title text-text-primary">Fluxo</h1>
           <p className="text-caption text-text-muted">Como seu caixa evolui daqui pra frente — trajetória, não gerenciamento</p>
         </div>
+        {/* Fase 5.4E.1.1 — MEDIDO ao vivo: px-3 py-1.5 dava 34px de hit
+            target real. `pointer-coarse:min-h-11` só em touch. */}
         <div className="flex gap-1">
           {HORIZON_OPTIONS.map((d) => (
             <button
               key={d}
               onClick={() => setHorizonDays(d)}
-              className={`focus-ring rounded-control px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer ${
+              className={`focus-ring inline-flex items-center justify-center rounded-control px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer pointer-coarse:min-h-11 ${
                 horizonDays === d ? "bg-surface-2 text-text-primary border border-border-strong" : "text-text-muted hover:text-text-primary hover:bg-surface-1"
               }`}
             >
