@@ -20,6 +20,7 @@
     "@prisma/client": "^6.9.0",
     "date-fns": "^4.1.0",
     "dotenv": "^16.4.5",
+    "lucide-react": "^0.469.0",
     "next": "^15.5.0",
     "node-telegram-bot-api": "^0.66.0",
     "react": "^19.1.0",

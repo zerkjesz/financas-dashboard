@@ -2,8 +2,18 @@
 @import "tailwindcss";
 
 /* Design system — dashboard financeiro escuro, denso em dados, sóbrio.
-   Baseado em recomendação de "Financial Dashboard" (Dark Mode OLED + Data-Dense). */
+   Baseado em recomendação de "Financial Dashboard" (Dark Mode OLED + Data-Dense).
+
+   Fase 5.4B — FUNDAÇÃO VISUAL. Tokens antigos (bg/surface/surface-2/border/
+   border-strong/muted/positive/positive-soft/negative/warning/info) são
+   PRESERVADOS com os MESMOS valores — nenhuma página/componente existente
+   muda de cor por causa desta fase (item 33, "existing app visual
+   compatibility": coexistência sem big-bang). Os tokens NOVOS abaixo são a
+   API semântica preferida por qualquer componente/primitive novo a partir
+   de agora (ONE TRUTH, ONE NAME também vale pra nomenclatura visual, não só
+   financeira) — ver docs/design-tokens.md para o mapa completo antigo→novo. */
 @theme {
+  /* ---- legado (Fase 3-5.3, inalterado) -------------------------------- */
   --color-bg: #020617;
   --color-surface: #0f172a;
   --color-surface-2: #1e293b;
@@ -16,6 +26,55 @@
   --color-warning: #fbbf24;
   --color-info: #38bdf8;
 
+  /* ---- Fase 5.4B — tokens semânticos novos ----------------------------
+     Superfície: 3 degraus por luminosidade (Rentier/5.4A seção 25), nunca
+     por borda pesada. surface-1 tem o MESMO valor de --color-surface (não é
+     um conceito novo, só o nome que qualquer primitive novo deve usar). */
+  --color-surface-1: #0f172a;
+  --color-surface-3: #283548;
+  --color-border-subtle: #1e293b;
+
+  /* Texto: 3 degraus (era só 2 — foreground/muted). text-secondary preenche
+     o vão entre título branco e legenda cinza-clara. */
+  --color-text-primary: #f8fafc;
+  --color-text-secondary: #cbd5e1;
+  --color-text-muted: #94a3b8;
+
+  /* Accent (5.4A seção 27): âmbar sofisticado, UM trabalho só — ação/seleção/
+     foco/brand touch. NUNCA usado pra estado financeiro positivo (esse é
+     --color-positive, token separado desde sempre). Escolhido por contraste
+     sobre --color-bg/--color-surface-2 (~8:1 e ~5.5:1 respectivamente,
+     medido — ver seção 9 do relatório desta fase) e por não colidir
+     visualmente com --color-warning (mesma família de matiz, luminosidade e
+     saturação deliberadamente distintas: warning é mais claro/amarelado,
+     accent é mais escuro/alaranjado).
+  */
+  --color-accent: #d99a3d;
+  --color-accent-hover: #e6ac57;
+  --color-accent-foreground: #1c1207;
+
+  /* Danger — MESMO valor de --color-negative (não diverge, só nome novo
+     pra semântica "estado crítico" em vez de "número negativo"; ver 5.4A
+     seção 11 — nem todo número negativo é danger). */
+  --color-danger: #f87171;
+
+  /* Restricted — VA e limite/crédito de cartão (5.4A seção 9/36):
+     "não é unrestrictedCash", nunca --color-positive mesmo com saldo alto. */
+  --color-restricted: #a78bda;
+
+  /* Hypothetical — qualquer coisa vinda do simulador (nunca contamina o
+     estado real, 5.4A seção 19/35). Reaproveita o matiz de --color-info
+     (já usado hoje como accent ad hoc em botões/foco legados) — mesma cor,
+     nome semântico novo pro papel que ela vai assumir daqui pra frente. */
+  --color-hypothetical: #38bdf8;
+
+  --color-focus-ring: var(--color-accent);
+
+  /* ---- Radius --------------------------------------------------------- */
+  --radius-control: 0.5rem;
+  --radius-card: 0.75rem;
+  --radius-pill: 999px;
+
   --font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
@@ -23,6 +82,7 @@
 :root {
   --background: var(--color-bg);
   --foreground: #f8fafc;
+  color-scheme: dark; /* Fase 5.4B, seção 6 — dark-primary single-theme; nenhum theme switcher nesta fase. */
 }
 
 body {
@@ -36,6 +96,80 @@ body {
 .tabular {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================================
+   Fase 5.4B, seção 10/11 — TYPOGRAPHY HIERARCHY. Classes utilitárias, não
+   tokens de cor — qualquer primitive/componente novo escolhe uma destas em
+   vez de um font-size arbitrário. Nenhum componente legado foi migrado pra
+   elas nesta fase (item 33) — coexistem até 5.4C+.
+   ========================================================================= */
+.text-display { font-size: 2.25rem; line-height: 1.15; font-weight: 700; letter-spacing: -0.01em; }
+.text-page-title { font-size: 1.5rem; line-height: 1.25; font-weight: 600; }
+.text-section-title { font-size: 1.0625rem; line-height: 1.35; font-weight: 600; }
+.text-card-title { font-size: 0.875rem; line-height: 1.4; font-weight: 600; }
+.text-body { font-size: 0.875rem; line-height: 1.55; font-weight: 400; }
+.text-caption { font-size: 0.75rem; line-height: 1.4; font-weight: 400; }
+.text-label { font-size: 0.6875rem; line-height: 1.3; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* Financial number display (5.4B, seção 11) — mono tabular em 2 tamanhos
+   (grande = display principal tipo freeMoney na Home; médio = valor de card
+   secundário). Sinal explícito e cor semântica ficam por conta de quem usa
+   (nunca hardcoded aqui — status/sinal dependem do dado, não do primitive). */
+.text-metric-lg { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 2rem; line-height: 1.1; font-weight: 600; letter-spacing: -0.01em; }
+.text-metric-md { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 1.25rem; line-height: 1.2; font-weight: 600; }
+
+/* Números grandes não podem quebrar layout em telas estreitas (5.4B, seção
+   37) — permite quebra de linha graciosa em vez de overflow/corte. */
+.text-metric-lg, .text-metric-md { overflow-wrap: break-word; word-break: break-word; }
+
+/* ============================================================================
+   Fase 5.4B, seção 20 — FOCUS SYSTEM. Todo elemento interativo NOVO usa
+   `.focus-ring` (ou :focus-visible direto via Tailwind `focus-visible:` nos
+   primitives) — nunca `outline: none` sem substituto. Elementos legados sem
+   essa classe mantêm o comportamento padrão do navegador (nem sempre visível,
+   achado da 5.4A seção 36 — corrigido progressivamente conforme migram pros
+   primitives novos, não retroativamente em massa nesta fase). */
+.focus-ring {
+  outline: none;
+}
+.focus-ring:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-control);
+}
+
+/* Fase 5.4B, seção 21 — reduced motion. Base global; nenhuma animação nova
+   elaborada foi introduzida nesta fase (só transitions curtas de cor/borda/
+   opacidade nos primitives), mas a regra de sistema já vale a partir de
+   agora pra qualquer transition futura.
+
+   ÚNICO uso de `!important` desta fundação (item 46, exceção documentada):
+   é o padrão universalmente aceito (MDN/WCAG 2.2 SC 2.3.3) pra reduced-motion
+   — precisa vencer QUALQUER duração de animação/transition definida em
+   qualquer lugar (inline style, lib de terceiro futura, etc.), nunca só a
+   dos primitives desta fase. Não é um blocker de especificidade local, é a
+   forma correta de implementar essa regra de acessibilidade. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Fase 5.4B, seção 25/27 — mobile bottom nav: altura fixa (usada pelo padding
+   inferior do conteúdo, ver PageContainer) + respeito à safe-area de
+   dispositivos com home indicator. */
+:root {
+  --mobile-nav-height: 4rem;
+}
+.pb-safe-bottom-nav {
+  padding-bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom, 0px));
+}
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 ::-webkit-scrollbar {

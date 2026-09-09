@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import AddForm from "./AddForm.jsx";
+import PageContainer from "./ui/PageContainer.jsx";
 import { DashboardSkeleton } from "./Skeleton.jsx";
 import FinancialTruthPanel from "./dashboard/FinancialTruthPanel.jsx";
 import BalanceCards from "./dashboard/BalanceCards.jsx";
@@ -45,7 +46,7 @@ export default function Dashboard() {
   const cycleEntries = cycleStart ? data.entries.filter((e) => new Date(e.occurredAt) >= cycleStart) : data.entries;
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+    <PageContainer>
       <header className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Finanças</h1>
         <button
@@ -105,6 +106,6 @@ export default function Dashboard() {
       </div>
 
       <TransactionsTable accounts={data.accounts} cards={data.cards} entries={data.entries} onChanged={load} />
-    </div>
+    </PageContainer>
   );
 }

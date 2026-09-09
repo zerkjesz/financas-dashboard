@@ -2,9 +2,14 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Card from "../components/ui/Card.jsx";
+import Input from "../components/ui/Input.jsx";
+import Button from "../components/ui/Button.jsx";
 
 // Fase 5.3C, item 21 — UI funcional MÍNIMA (sem redesign): formulário simples,
 // estado de erro, nada de dashboard financeiro visível antes do login.
+// Fase 5.4B, item 31 — recebe os primitives da fundação (Card/Input/Button)
+// pra não parecer outro produto do resto do app — sem virar marketing page.
 export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
@@ -39,31 +44,25 @@ export default function LoginPage() {
 
   return (
     <div className="max-w-sm mx-auto px-4 py-24">
-      <h1 className="text-xl font-semibold tracking-tight mb-6 text-center">Entrar</h1>
-      <form onSubmit={handleSubmit} className="rounded-xl border border-border bg-surface p-5 space-y-4">
-        <div>
-          <label htmlFor="password" className="block text-xs text-muted mb-1.5">
-            Senha
-          </label>
-          <input
-            id="password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full bg-surface-2 border border-border rounded-md px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-info"
-            autoFocus
-          />
-        </div>
-        {error && <div className="text-sm text-negative">{error}</div>}
-        <button
-          type="submit"
-          disabled={loading || !password}
-          className="w-full rounded-lg bg-positive hover:bg-positive-soft disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 text-sm font-medium text-slate-950 transition-colors cursor-pointer"
-        >
-          {loading ? "Entrando..." : "Entrar"}
-        </button>
-      </form>
+      <h1 className="text-page-title text-center mb-6 text-text-primary">Entrar</h1>
+      <Card>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label htmlFor="password" className="text-label text-text-muted mb-1.5 block">
+              Senha
+            </label>
+            <Input id="password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
+          </div>
+          {error && (
+            <div role="alert" className="text-sm text-danger">
+              {error}
+            </div>
+          )}
+          <Button type="submit" disabled={loading || !password} loading={loading} className="w-full">
+            {loading ? "Entrando..." : "Entrar"}
+          </Button>
+        </form>
+      </Card>
     </div>
   );
 }
