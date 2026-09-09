@@ -110,34 +110,32 @@ export default function Dashboard() {
           motivo estruturado REAL (lib/financialStatus.js), nunca uma frase
           inventada aqui nem duplicando o que o hero já diz. */}
       {criticalReason && (
-        <div role="alert" className="mb-6 rounded-card border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-text-primary">
+        <div role="alert" className="mb-6 rounded-card bg-danger/10 px-4 py-3 text-sm text-text-primary">
           {criticalReason.message}
         </div>
       )}
 
       {/* 1. Como eu tô? + 2. O que vem a seguir? (lado a lado no desktop, sem
-          reordenar o DOM em mobile — só o grid muda de 1 pra 2 colunas). */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+          reordenar o DOM em mobile — só o grid muda de 1 pra 2 colunas).
+          Fase 5.4C.1, item 39 — ritmo vertical variado: gap-4 (16px) DENTRO
+          de uma linha de cards relacionados, mb-8 (32px) ENTRE clusters de
+          assunto diferente (decisão -> contexto -> exploração) — nunca o
+          mesmo espaçamento uniforme em tudo (achado da 5.4C.1). */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8 items-start">
         <div className="lg:col-span-2">
           <FinancialHero financial={financial} />
         </div>
         <NextIncomeCard nextIncome={financial.nextIncome} nextIncomeCommitment={financial.nextIncomeCommitment} />
       </div>
 
-      {/* 3. Onde estão os números físicos? */}
-      <div className="mb-4">
+      {/* 3. Onde estão os números físicos? + 4. Existe risco em aberto? */}
+      <div className="space-y-4 mb-8">
         <PhysicalMoneyContext liquidity={financial.liquidity} cards={data.cards} restricted={financial.restricted} />
+        {hasRisk && <RiskSurface contingency={financial.contingency} />}
       </div>
 
-      {/* 4. Existe risco em aberto? — só existe no DOM quando há contingência ativa. */}
-      {hasRisk && (
-        <div className="mb-4">
-          <RiskSurface contingency={financial.contingency} />
-        </div>
-      )}
-
       {/* 5. Pra onde foi o dinheiro? + 6. Como fico? */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
         <SpendingSection entries={cycleEntries} />
         <ProjectionSummary projectionSummary={financial.projectionSummary} />
       </div>

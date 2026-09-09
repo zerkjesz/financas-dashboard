@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { formatMoney, formatDate } from "@/lib/formatMoney";
-import Badge from "../ui/Badge.jsx";
 import Disclosure from "../ui/Disclosure.jsx";
 import {
   STATUS_COPY,
@@ -15,12 +14,32 @@ import {
   shouldSuggestSimulation,
 } from "@/lib/homePresentation";
 
-// Fase 5.4C, itens 6/7/8/9/11/12/13/32 — o HERO é o bloco único de decisão:
-// status + freeMoney + safeToSpend + motivo dominante no MESMO contexto
-// visual (nunca 3 cards separados — eles respondem a mesma pergunta).
-// Nenhum cálculo financeiro aqui — só formatação/seleção de apresentação
-// sobre `financial` (lib/productFinancialSnapshot.js, a fonte canônica).
-const STATUS_BADGE_VARIANT = { TRANQUILO: "positive", ATENCAO: "warning", APERTADO: "danger", CRITICO: "danger" };
+// Fase 5.4C.1 — HERO como composição única (não 3 mini-cards dentro de um
+// card). Diferenciação de profundidade: só o Hero recebe `bg-surface-2`
+// (um degrau mais claro que as superfícies secundárias, que ficam em
+// `surface-1`) + uma hairline superior na cor do status + um wash radial
+// muito sutil — nunca borda pesada, nunca gradient chamativo (item 8/30).
+// Status deixa de ser "badge no canto": vira parte da tipografia
+// (STATUS_COPY.label em .text-page-title, cor semântica), com um marcador
+// de forma (ponto) em vez de bolinha colorida sozinha.
+const STATUS_TEXT_CLASS = {
+  TRANQUILO: "text-positive",
+  ATENCAO: "text-warning",
+  APERTADO: "text-danger",
+  CRITICO: "text-danger",
+};
+const STATUS_BAR_CLASS = {
+  TRANQUILO: "bg-positive",
+  ATENCAO: "bg-warning",
+  APERTADO: "bg-danger",
+  CRITICO: "bg-danger",
+};
+const STATUS_WASH = {
+  TRANQUILO: "34,197,94",
+  ATENCAO: "224,169,74",
+  APERTADO: "248,113,113",
+  CRITICO: "248,113,113",
+};
 
 export default function FinancialHero({ financial }) {
   const { liquidity, currentObligations } = financial;
@@ -29,63 +48,72 @@ export default function FinancialHero({ financial }) {
   const restItems = dominant ? currentObligations.breakdown.filter((item) => item !== dominant) : [];
   const legend = freeMoneyLegend(liquidity.freeMoney);
   const suggestSimulate = shouldSuggestSimulation(liquidity.status);
+  const wash = STATUS_WASH[liquidity.status] ?? STATUS_WASH.ATENCAO;
 
   return (
-    <div className="rounded-card border border-border-subtle bg-surface-2 p-5">
-      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-        <h2 className="text-section-title text-text-primary">Situação financeira</h2>
-        <Badge variant={STATUS_BADGE_VARIANT[liquidity.status] ?? "neutral"}>{copy.label}</Badge>
-      </div>
-      <p className="text-body text-text-secondary mb-4">{copy.headline}</p>
+    <div className="relative overflow-hidden rounded-card bg-surface-2 p-6 sm:p-7">
+      {/* hairline de status — substitui o badge isolado; a cor do status já
+          está presente antes de qualquer texto ser lido. */}
+      <div className={`absolute inset-x-0 top-0 h-[3px] ${STATUS_BAR_CLASS[liquidity.status] ?? "bg-border-strong"}`} aria-hidden="true" />
+      {/* wash radial muito sutil, só nesta superfície (item 8) — profundidade,
+          nunca decoração chamativa. */}
+      <div
+        className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full blur-3xl"
+        style={{ background: `rgba(${wash}, 0.07)` }}
+        aria-hidden="true"
+      />
 
-      {/* Item 39 — testado ao vivo em 390px: grid-cols-2 fixo deixava a
-          coluna estreita demais pra .text-metric-lg com valores negativos
-          (ex: "-R$ 302,80" quebrava entre o sinal e o valor). 1 coluna até
-          "sm", 2 colunas a partir daí — nunca deixa o número quebrar no meio. */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div>
-          <div className="text-label text-text-muted mb-1">Dinheiro livre</div>
-          {/* Item 8 — nunca só "-R$ 302,80" sozinho: sinal explícito (já vem
-              de formatMoney) + cor semântica só quando negativo + legenda. */}
-          <div className={`text-metric-lg ${liquidity.freeMoney < 0 ? "text-danger" : "text-text-primary"}`}>{formatMoney(liquidity.freeMoney)}</div>
-          {legend && (
-            <div className="text-caption text-text-muted mt-0.5">
-              {formatMoney(Math.abs(liquidity.freeMoney))} {legend}
-            </div>
-          )}
+      <div className="relative">
+        <div className="flex items-center gap-2 mb-1">
+          <span className={`h-2 w-2 rounded-full ${STATUS_BAR_CLASS[liquidity.status] ?? "bg-border-strong"}`} aria-hidden="true" />
+          <span className="text-label text-text-muted">Situação financeira</span>
         </div>
-        <div>
-          <div className="text-label text-text-muted mb-1">Seguro pra gastar</div>
-          {/* Item 9 — R$0,00 é um resultado válido, nunca "—"/vazio/disabled. */}
-          <div className="text-metric-lg text-text-primary">{formatMoney(liquidity.safeToSpend)}</div>
-        </div>
-      </div>
+        <h2 className={`text-page-title mb-1.5 ${STATUS_TEXT_CLASS[liquidity.status] ?? "text-text-primary"}`}>{copy.label}</h2>
+        <p className="text-body text-text-secondary mb-6 max-w-md">{copy.headline}</p>
 
-      {dominant && (
-        <div className="mt-4 pt-3 border-t border-border-subtle">
-          <div className="text-label text-text-muted mb-2">Por que</div>
-          <BreakdownItem item={dominant} />
-          {restItems.length > 0 && (
-            <Disclosure summary={`ver mais ${restItems.length} ${restItems.length === 1 ? "item" : "itens"}`} className="mt-1">
-              <div className="pt-1 space-y-1.5">
-                {restItems.map((item, i) => (
-                  <BreakdownItem key={i} item={item} />
-                ))}
+        <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:gap-10">
+          <div>
+            <div className="text-label text-text-muted mb-1">Dinheiro livre</div>
+            <div className={`text-metric-lg ${liquidity.freeMoney < 0 ? "text-danger" : "text-text-primary"}`}>{formatMoney(liquidity.freeMoney)}</div>
+            {legend && (
+              <div className="text-caption text-text-muted mt-1">
+                {formatMoney(Math.abs(liquidity.freeMoney))} {legend}
               </div>
-            </Disclosure>
-          )}
+            )}
+          </div>
+          {/* Item 11 — safeToSpend nunca disputa protagonismo com freeMoney:
+              escala tipográfica menor (.text-metric-md), alinhado à base do
+              número maior, sem card próprio. */}
+          <div className="sm:pb-0.5">
+            <div className="text-label text-text-muted mb-1">Seguro pra gastar hoje</div>
+            <div className="text-metric-md text-text-primary">{formatMoney(liquidity.safeToSpend)}</div>
+          </div>
         </div>
-      )}
 
-      {/* Item 32 — CTA discreto, nunca banner extra; só quando o status já
-          justifica cautela. Não pré-preenche o simulador (isso é 5.4E). */}
-      {suggestSimulate && (
-        <div className="mt-4 pt-3 border-t border-border-subtle">
-          <Link href="/simulador" className="focus-ring inline-block rounded-control text-sm font-medium text-accent hover:text-accent-hover transition-colors">
-            Simular antes de comprar →
-          </Link>
-        </div>
-      )}
+        {dominant && (
+          <div className="mt-6 rounded-lg bg-surface-1/70 p-4">
+            <div className="text-label text-text-muted mb-2">Por que</div>
+            <BreakdownItem item={dominant} />
+            {restItems.length > 0 && (
+              <Disclosure summary={`ver mais ${restItems.length} ${restItems.length === 1 ? "item" : "itens"}`} className="mt-1">
+                <div className="pt-1 space-y-1.5">
+                  {restItems.map((item, i) => (
+                    <BreakdownItem key={i} item={item} />
+                  ))}
+                </div>
+              </Disclosure>
+            )}
+          </div>
+        )}
+
+        {suggestSimulate && (
+          <div className="mt-5">
+            <Link href="/simulador" className="focus-ring inline-block rounded-control text-sm font-medium text-accent hover:text-accent-hover transition-colors">
+              Simular antes de comprar →
+            </Link>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -110,9 +138,8 @@ function BreakdownItem({ item }) {
     </div>
   );
 
-  // Item 13 — só card bill tem destino real hoje (/cartoes); nunca link fake.
   return href ? (
-    <Link href={href} className="focus-ring -mx-2 block rounded-control px-2 transition-colors hover:bg-surface-3">
+    <Link href={href} className="focus-ring -mx-2 block rounded-control px-2 transition-colors hover:bg-surface-2/60">
       {content}
     </Link>
   ) : (

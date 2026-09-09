@@ -30,16 +30,16 @@ export default function SpendingSection({ entries }) {
   // Item 40 — empty state honesto, nunca um card vazio de layout.
   if (breakdown.length === 0) {
     return (
-      <div className="rounded-card border border-border-subtle bg-surface-1 p-5">
-        <h2 className="text-section-title text-text-primary mb-2">Pra onde foi o dinheiro</h2>
+      <div className="rounded-card bg-surface-1 p-6">
+        <h2 className="text-label text-text-muted mb-2">Pra onde foi o dinheiro</h2>
         <p className="text-body text-text-muted">Nenhum gasto registrado neste ciclo ainda.</p>
       </div>
     );
   }
 
   return (
-    <div className="rounded-card border border-border-subtle bg-surface-1 p-5">
-      <h2 className="text-section-title text-text-primary mb-4">Pra onde foi o dinheiro (ciclo atual)</h2>
+    <div className="rounded-card bg-surface-1 p-6">
+      <h2 className="text-label text-text-muted mb-4">Pra onde foi o dinheiro (ciclo atual)</h2>
       <div className="space-y-3 mb-4">
         {breakdown.map(([category, value]) => {
           const color = CATEGORY_COLORS[category] || CATEGORY_COLORS.Outros;
