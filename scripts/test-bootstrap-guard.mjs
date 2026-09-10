@@ -77,38 +77,85 @@ console.log("--- Fase 5.6.1: testes do guard prod-safe ---\n");
   const { code } = runGuard({ env: { ...OK_ENV, VERCEL: "1" } });
   check(code !== 0, "[6] VERCEL=1 -> ABORT");
 }
+// helper: escreve um auth file da forma que o orquestrador escreve (per-fase, com nonce)
+function writeAuthFile({ runId = "run-X", phase = "apply-fase52c-obligations.mjs", nonce = "nonce-1", ts = Date.now(), allGatesGreen = true } = {}) {
+  fs.writeFileSync(AUTH_FILE, JSON.stringify({ runId, phase, nonce, ts, allGatesGreen }, null, 2));
+}
+// env que o orquestrador passa pro subprocesso de --apply de uma fase
+function applyEnv({ runId = "run-X", phase = "apply-fase52c-obligations.mjs", nonce = "nonce-1" } = {}) {
+  return { ...OK_ENV, NORTE_BOOTSTRAP_RUN_ID: runId, NORTE_BOOTSTRAP_PHASE: phase, NORTE_BOOTSTRAP_NONCE: nonce };
+}
+
 // 7) --apply SEM arquivo de autorização do orquestrador → ABORT
 {
   try { fs.unlinkSync(AUTH_FILE); } catch { /* já ausente */ }
-  const { code, out } = runGuard({ env: { ...OK_ENV, NORTE_BOOTSTRAP_RUN_ID: "abc" }, argv: ["--apply"] });
+  const { code, out } = runGuard({ env: applyEnv(), argv: ["--apply"] });
   check(code !== 0 && /autorização do orquestrador/.test(out), "[7] --apply sem arquivo de autorização -> ABORT (bloqueia execução direta do script)");
 }
 // 8) --apply com auth file de runId DIFERENTE → ABORT
 {
-  fs.writeFileSync(AUTH_FILE, JSON.stringify({ runId: "run-A", ts: Date.now(), allGatesGreen: true }));
-  const { code, out } = runGuard({ env: { ...OK_ENV, NORTE_BOOTSTRAP_RUN_ID: "run-B" }, argv: ["--apply"] });
+  writeAuthFile({ runId: "run-A" });
+  const { code, out } = runGuard({ env: applyEnv({ runId: "run-B" }), argv: ["--apply"] });
   check(code !== 0 && /runId/.test(out), "[8] --apply com runId != autorização -> ABORT");
   fs.unlinkSync(AUTH_FILE);
 }
-// 9) --apply com auth file EXPIRADO → ABORT
+// 9) --apply com auth file EXPIRADO (>60 s) → ABORT
 {
-  fs.writeFileSync(AUTH_FILE, JSON.stringify({ runId: "run-C", ts: Date.now() - 20 * 60 * 1000, allGatesGreen: true }));
-  const { code, out } = runGuard({ env: { ...OK_ENV, NORTE_BOOTSTRAP_RUN_ID: "run-C" }, argv: ["--apply"] });
-  check(code !== 0 && /expirada/.test(out), "[9] --apply com autorização expirada (>15min) -> ABORT");
+  writeAuthFile({ runId: "run-C", nonce: "n-c", ts: Date.now() - 61 * 1000 });
+  const { code, out } = runGuard({ env: applyEnv({ runId: "run-C", nonce: "n-c" }), argv: ["--apply"] });
+  check(code !== 0 && /expirada/.test(out), "[9] --apply com autorização expirada (>60 s) -> ABORT");
+  fs.unlinkSync(AUTH_FILE);
+}
+// 9b) --apply com auth de 30 s atrás (dentro da janela de 60 s) → passa (recovery)
+{
+  writeAuthFile({ runId: "run-C2", nonce: "n-c2", ts: Date.now() - 30 * 1000 });
+  const { code, out } = runGuard({ env: applyEnv({ runId: "run-C2", nonce: "n-c2" }), argv: ["--apply"] });
+  check(code === 0 && out.includes("GUARD_PASSED"), "[9b] --apply com autorização de 30 s (janela de recovery) -> passa");
   fs.unlinkSync(AUTH_FILE);
 }
 // 10) --apply com auth file válido MAS allGatesGreen=false → ABORT
 {
-  fs.writeFileSync(AUTH_FILE, JSON.stringify({ runId: "run-D", ts: Date.now(), allGatesGreen: false }));
-  const { code, out } = runGuard({ env: { ...OK_ENV, NORTE_BOOTSTRAP_RUN_ID: "run-D" }, argv: ["--apply"] });
+  writeAuthFile({ runId: "run-D", nonce: "n-d", allGatesGreen: false });
+  const { code, out } = runGuard({ env: applyEnv({ runId: "run-D", nonce: "n-d" }), argv: ["--apply"] });
   check(code !== 0 && /8 gates/.test(out), "[10] --apply com gates não-verdes -> ABORT");
   fs.unlinkSync(AUTH_FILE);
 }
-// 11) --apply com auth file VÁLIDO e recente e gates verdes → passa
+// 11) --apply com auth file VÁLIDO (runId+phase+nonce+ts+gates) → passa
 {
-  fs.writeFileSync(AUTH_FILE, JSON.stringify({ runId: "run-E", ts: Date.now(), allGatesGreen: true }));
-  const { code, out } = runGuard({ env: { ...OK_ENV, NORTE_BOOTSTRAP_RUN_ID: "run-E" }, argv: ["--apply"] });
+  writeAuthFile({ runId: "run-E", phase: "apply-fase52c-obligations.mjs", nonce: "n-e" });
+  const { code, out } = runGuard({ env: applyEnv({ runId: "run-E", phase: "apply-fase52c-obligations.mjs", nonce: "n-e" }), argv: ["--apply"] });
   check(code === 0 && out.includes("GUARD_PASSED"), "[11] --apply com autorização válida do orquestrador -> passa");
+  fs.unlinkSync(AUTH_FILE);
+}
+// 11b) SINGLE-USE: a autorização vale UMA vez. O orquestrador deleta o arquivo
+//      logo após a fase; se um 2º subprocesso tentar reusar, o arquivo não existe.
+{
+  writeAuthFile({ runId: "run-F", phase: "apply-fase52c-obligations.mjs", nonce: "n-f" });
+  const first = runGuard({ env: applyEnv({ runId: "run-F", phase: "apply-fase52c-obligations.mjs", nonce: "n-f" }), argv: ["--apply"] });
+  fs.unlinkSync(AUTH_FILE); // <- o orquestrador faz isso no finally de cada fase
+  const second = runGuard({ env: applyEnv({ runId: "run-F", phase: "apply-fase52c-obligations.mjs", nonce: "n-f" }), argv: ["--apply"] });
+  check(first.code === 0 && first.out.includes("GUARD_PASSED"), "[11b] autorização single-use: 1ª execução -> passa");
+  check(second.code !== 0 && /autorização do orquestrador/.test(second.out), "[11b] autorização single-use: 2ª execução (arquivo consumido) -> ABORT");
+}
+// 11c) --apply com auth de OUTRA fase (phase não bate) → ABORT
+{
+  writeAuthFile({ runId: "run-G", phase: "apply-fase51b-card-v2.mjs", nonce: "n-g" });
+  const { code, out } = runGuard({ env: applyEnv({ runId: "run-G", phase: "apply-fase52d-va-rule.mjs", nonce: "n-g" }), argv: ["--apply"] });
+  check(code !== 0 && /fase/.test(out), "[11c] --apply com autorização de outra fase -> ABORT");
+  fs.unlinkSync(AUTH_FILE);
+}
+// 11d) --apply com nonce que não bate (autorização de outra rodada da mesma fase) → ABORT
+{
+  writeAuthFile({ runId: "run-H", phase: "apply-fase52c-obligations.mjs", nonce: "nonce-real" });
+  const { code, out } = runGuard({ env: applyEnv({ runId: "run-H", phase: "apply-fase52c-obligations.mjs", nonce: "nonce-outro" }), argv: ["--apply"] });
+  check(code !== 0 && /nonce/.test(out), "[11d] --apply com nonce != autorização -> ABORT");
+  fs.unlinkSync(AUTH_FILE);
+}
+// 11e) --apply válido no arquivo mas SEM NORTE_BOOTSTRAP_NONCE no env → ABORT
+{
+  writeAuthFile({ runId: "run-I", phase: "apply-fase52c-obligations.mjs", nonce: "n-i" });
+  const { code, out } = runGuard({ env: { ...OK_ENV, NORTE_BOOTSTRAP_RUN_ID: "run-I", NORTE_BOOTSTRAP_PHASE: "apply-fase52c-obligations.mjs" }, argv: ["--apply"] });
+  check(code !== 0 && /nonce/.test(out), "[11e] --apply sem NORTE_BOOTSTRAP_NONCE no env -> ABORT");
   fs.unlinkSync(AUTH_FILE);
 }
 // 12) NO_DIRECT_SCRIPT_ACCIDENT: script real SEM o loader -> guard ORIGINAL barra

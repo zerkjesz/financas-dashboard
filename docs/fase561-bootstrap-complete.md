@@ -117,6 +117,15 @@ DELETE (`N/A`).
 
 ## WRITE ACCOUNTING FINAL
 
+> **CORRIGIDO na Fase 5.6.1.1** — ver `docs/fase5611-protected-runtime-acceptance.md`
+> §2. Os dois números abaixo estavam errados: `PRODUCTION_RECONCILIATION_CREATES`
+> é **60** financeiro + 1 config (a enumeração já somava 60; o headline "59"
+> largou o `+1 Contingency`), e `PRODUCTION_RECONCILIATION_UPDATES` é **24**
+> (o "15" não contava os realinhamentos estruturais: `Card.closingDay`,
+> `Purchase.firstInstallmentMonth`, 6× `Installment.billMonth`,
+> `RecurringRule.dayOfMonth` da 5.2D). `EXPECTED_CANONICAL_VALUE_CORRECTIONS = 1`,
+> `NET_CANONICAL_CORRECTION = +0.05`. `UNEXPECTED_FINANCIAL_WRITES` segue 0.
+
 | | |
 |---|---|
 | `PRODUCTION_CONFIG_BOOTSTRAP_WRITES` | 1 (AppSettings) |

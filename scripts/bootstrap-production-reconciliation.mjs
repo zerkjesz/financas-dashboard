@@ -152,14 +152,16 @@ async function anchor(connString, label) {
   return { label, counts, sums };
 }
 
-function runScript(scriptFile, connString, endpoint, { dryRun }) {
+let AUTH_GATES_GREEN = false; // setado uma vez após os 8 network gates
+
+function runScript(scriptFile, connString, endpoint, { dryRun, phaseId }) {
   const args = ["--import", "./" + LOADER, path.join("scripts", scriptFile)];
-  // `--dry-run` é lido pelos scripts de apply. `--apply` os scripts IGNORAM
-  // (argv desconhecido), mas o guard `assertProductionReconciliation` o
-  // exige pra liberar escrita real — só passa em modo write, e só quando o
-  // orquestrador já gravou o arquivo de autorização (8 gates verdes).
+  // `--dry-run` é lido pelos scripts. `--apply` os scripts IGNORAM, mas o
+  // guard o exige pra liberar escrita — e só passa se o orquestrador gravou
+  // a autorização SINGLE-USE desta fase (nonce + phase) < 60 s atrás.
   if (dryRun) args.push("--dry-run");
   else args.push("--apply");
+
   const env = {
     ...process.env,
     DATABASE_URL: connString, DIRECT_URL: connString,
@@ -168,20 +170,31 @@ function runScript(scriptFile, connString, endpoint, { dryRun }) {
     NORTE_PROD_ENDPOINT: endpoint,
     NORTE_BOOTSTRAP_RUN_ID: RUN_ID,
   };
+
+  // AUTH SINGLE-USE, POR FASE: só grava o arquivo pra a escrita real, imediatamente
+  // antes de spawnar; deleta imediatamente depois (no finally). Nunca fica válido
+  // entre fases nem entre execuções.
+  let nonce = null;
+  if (!dryRun) {
+    nonce = crypto.randomUUID();
+    env.NORTE_BOOTSTRAP_PHASE = phaseId;
+    env.NORTE_BOOTSTRAP_NONCE = nonce;
+    fs.writeFileSync(AUTH_FILE, JSON.stringify({ runId: RUN_ID, phase: phaseId, nonce, ts: Date.now(), allGatesGreen: AUTH_GATES_GREEN }, null, 2));
+  }
+
   let out = "", code = 0;
   try {
     out = execFileSync("node", args, { cwd: REPO, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 30 * 1024 * 1024 });
   } catch (e) {
     code = e.status ?? 1;
     out = (e.stdout || "") + "\n[STDERR]\n" + (e.stderr || "");
+  } finally {
+    if (!dryRun) clearAuth(); // consome o single-use: some imediatamente após a fase
   }
   const redacted = out.split(connString).join("<REDACTED_CONN>").split(endpoint).join("<PROD_ENDPOINT>");
   return { code, out: redacted };
 }
 
-function writeAuth(allGatesGreen) {
-  fs.writeFileSync(AUTH_FILE, JSON.stringify({ runId: RUN_ID, ts: Date.now(), allGatesGreen }, null, 2));
-}
 function clearAuth() {
   try { fs.unlinkSync(AUTH_FILE); } catch { /* ok */ }
 }
@@ -207,7 +220,9 @@ async function main() {
     console.log(JSON.stringify(gates, null, 1));
     console.log(`allGatesGreen = ${allGreen}`);
     if (!allGreen) throw new Error("8 gates de rede não estão todos verdes — ABORT, nenhum write");
-    writeAuth(allGreen);
+    // NÃO grava a autorização aqui. Ela é single-use, por fase: o runScript grava
+    // imediatamente antes de spawnar cada --apply e deleta imediatamente depois.
+    AUTH_GATES_GREEN = allGreen;
   }
 
   console.log("\n--- PRE ANCHOR ---");
@@ -221,13 +236,13 @@ async function main() {
       console.log(`\n${"─".repeat(70)}\n▶ ${s.phase}  (${s.file})`);
 
       if (s.dryRunSupported) {
-        const dr = runScript(s.file, connString, endpoint, { dryRun: true });
+        const dr = runScript(s.file, connString, endpoint, { dryRun: true, phaseId: s.file });
         console.log(`  [dry-run] exit=${dr.code}`);
         console.log(dr.out.split("\n").map((l) => "    " + l).join("\n"));
         if (dr.code !== 0) throw new Error(`dry-run de ${s.file} falhou (exit ${dr.code})`);
       }
       if (APPLY || (PHASE0_ONLY && s.phase0)) {
-        const rr = runScript(s.file, connString, endpoint, { dryRun: false });
+        const rr = runScript(s.file, connString, endpoint, { dryRun: false, phaseId: s.file });
         console.log(`  [APPLY] exit=${rr.code}`);
         console.log(rr.out.split("\n").map((l) => "    " + l).join("\n"));
         results.push({ ...s, apply: rr.code });

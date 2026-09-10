@@ -29,7 +29,10 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)); // scripts/lib
 const AUTH_FILE = path.join(HERE, ".bootstrap-authorized.json"); // scripts/lib/.bootstrap-authorized.json
-const AUTH_MAX_AGE_MS = 15 * 60 * 1000;
+// Janela CURTA (60 s): o orquestrador grava o arquivo imediatamente antes de
+// spawnar CADA fase de --apply e o deleta imediatamente depois — nunca fica
+// válido entre fases nem entre execuções.
+const AUTH_MAX_AGE_MS = 60 * 1000;
 
 export function assertProductionReconciliation() {
   const problems = [];
@@ -78,8 +81,17 @@ export function assertProductionReconciliation() {
       if (!process.env.NORTE_BOOTSTRAP_RUN_ID || auth.runId !== process.env.NORTE_BOOTSTRAP_RUN_ID) {
         problems.push(`--apply: runId da autorização não bate com esta execução`);
       }
+      // per-fase: a autorização é emitida pra UMA fase específica (nonce +
+      // phase). Um subprocesso de outra fase — ou uma 2ª execução da mesma —
+      // não bate.
+      if (!process.env.NORTE_BOOTSTRAP_PHASE || auth.phase !== process.env.NORTE_BOOTSTRAP_PHASE) {
+        problems.push(`--apply: a autorização é pra a fase "${auth.phase}", não "${process.env.NORTE_BOOTSTRAP_PHASE ?? "(nenhuma)"}"`);
+      }
+      if (!process.env.NORTE_BOOTSTRAP_NONCE || auth.nonce !== process.env.NORTE_BOOTSTRAP_NONCE) {
+        problems.push(`--apply: nonce da autorização não bate (single-use consumido)`);
+      }
       if (!auth.ts || Date.now() - auth.ts > AUTH_MAX_AGE_MS) {
-        problems.push(`--apply: autorização do orquestrador expirada (>15 min)`);
+        problems.push(`--apply: autorização do orquestrador expirada (>60 s)`);
       }
       if (auth.allGatesGreen !== true) {
         problems.push(`--apply: o orquestrador não confirmou os 8 gates verdes`);
