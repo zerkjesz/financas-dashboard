@@ -174,15 +174,24 @@ na próxima renda", "+1 renda", "+2 rendas"...), nunca "dia X do mês Y".
     em produção. Na prática o FAIL_CLOSED quase nunca dispara: a Vercel
     sempre seta `x-forwarded-for` pra tráfego real que passa pela borda
     dela; `null` significaria requisição chegando por um caminho anômalo.
-  - **STORAGE BOUNDEDNESS** (Fase 5.5.1): a expiração da janela (1h) é
-    lógica; a limpeza FÍSICA é feita por `sweepExpired()` — um único
+  - **STORAGE — retenção time-bounded + GC eventual, NÃO hard bound**
+    (Fase 5.5.2, corrigindo o overclaim da 5.5.1): a expiração da janela
+    (1h) é lógica; a limpeza FÍSICA é `sweepExpired()` — um único
     `DELETE ... WHERE ctid IN (SELECT ctid ... LIMIT 100)`, oportunista (a
-    cada `recordFailure`), atômico e BOUNDED (nunca full-table delete numa
-    request de login), best-effort (um erro na limpeza nunca afeta a
-    decisão de rate limit). Sem isso, cada IP distinto que errasse o login
-    uma vez deixaria uma linha permanente (storage amplification sob ataque
-    distribuído). `clearAttempts` (login bem-sucedido) já remove a linha
-    fisicamente.
+    cada `recordFailure`), atômico, best-effort. `clearAttempts` (login OK)
+    remove a linha fisicamente.
+    - `HARD_STORAGE_BOUND` = **NÃO**. Num flood distribuído, N IPs numa
+      janela de 1h criam até N linhas antes de qualquer expirar.
+    - `DELETE_BATCH_BOUND` = 100/chamada (hard).
+    - `ROTATING_IP_STORAGE_AMPLIFICATION` existe (~150 B/IP/h; drena
+      quando o flood para). Resíduo aceito pra app pessoal — mesma
+      categoria de `DISTRIBUTED_ROTATING_IP_RESISTANCE`.
+    - Performance (EXPLAIN ANALYZE real, branch dev do Neon): ~1,5 ms a 20
+      linhas, ~2,3 ms a 20k linhas no caso degenerado (todos os buffers em
+      cache). NÃO justifica índice nessa escala — um índice em
+      `windowStart` pagaria amplificação de escrita em todo upsert. Fix
+      mínimo se algum dia >100k linhas vivas:
+      `CREATE INDEX ON "LoginRateLimit"("windowStart") WHERE "blockedUntil" IS NULL`.
   - **DISTRIBUTED_ROTATING_IP_RESISTANCE = NO** (risco residual aceito):
     rate limit por IP não impede um atacante com muitos IPs distintos. Para
     um app pessoal single-user isso é risco residual aceitável — o segredo
@@ -211,26 +220,29 @@ completo (inclui `DIRECT_URL`, adicionado na Fase 5.4F.1).
 
 ## 11. Blockers conhecidos de pré-produção
 
-Estado após a Fase 5.5.1 (inspeção read-only real de Neon + do deployment
-de produção; Vercel/Telegram continuam sem acesso autenticado).
+Estado após a Fase 5.5.2 (Vercel + Neon autenticados; ações protetivas de
+produção executadas; auditoria read-only dos dados de produção).
 
 | Item | Tipo | Status |
 |---|---|---|
-| Rate limit não resistente a reset pelo cliente | INFRASTRUCTURE | **RESOLVIDO (código)** na Fase 5.5/5.5.1 — enforcement server-authoritative + bounded + fail-closed em Postgres, ver seção 9. Depende de migration em produção (linha abaixo). |
-| **Produção roda código PRÉ-AUTENTICAÇÃO (pré-V2)** | CODE_DEPLOYMENT | **CRÍTICO, PENDENTE.** `origin/main` está 61 commits atrás do local. Inspeção read-only de `https://financas-dashboard-omega.vercel.app` na Fase 5.5.1: `/login` → 404, `/api/dashboard` → **200 com payload financeiro completo, SEM autenticação**. Toda a camada de auth (Fases 5.3C+) e toda a arquitetura V2 (Fases 5.1–5.5) nunca foram para produção. A API financeira de produção está pública. Corrigido só pelo cutover da Fase 5.6 (deploy do bundle de 61 commits). |
-| **Produção está 7 migrations atrás** | PENDING_PRODUCTION_MIGRATION | `prisma migrate status` read-only contra o branch `production` do Neon (Fase 5.5.1): só as 5 primeiras migrations aplicadas. Pendentes: `convert_money_fields_to_decimal` (Float→Decimal, TYPE CHANGE — precisa re-rodar a auditoria da Fase 3.0 contra os dados REAIS de produção antes do cutover), `appsettings_dataconfidence`, `domain_models_v2`, `income_recurring_occurrence_date`, `external_installment_due_timing`, `telegram_update_receipt`, `login_rate_limit`. 6 das 7 são estritamente aditivas/seguras; só a de Decimal exige validação prévia. Ordem já correta (timestamp-prefix). Aplicar via `prisma migrate deploy` no cutover — nunca antes. |
-| Variáveis de ambiente de produção (Vercel) | CONFIGURATION | `BLOCKED_BY_EXTERNAL_ACCESS` — `vercel whoami` → "Logged out" (Fase 5.5.1). Exige `vercel login` do dono + `vercel env ls production` pra confirmar `SESSION_SECRET`, `DASHBOARD_PASSWORD_HASH`, `DATABASE_URL`, `DIRECT_URL`, `TELEGRAM_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_ALLOWED_USER_ID` presentes; e `AUTH_DEV_BYPASS` ausente/falsy, `DATABASE_ENV` semanticamente de produção (ambos são STOP/CRITICAL se errados) — nomes apenas, nunca valores |
-| Backup/PITR do branch de produção (Neon) | INFRASTRUCTURE | **PARCIALMENTE VERIFICADO** (Fase 5.5.1, `neonctl` read-only): projeto `cool-firefly-30627522`, `history_retention_seconds = 21600` → **PITR de 6h** (default de plano gratuito). O branch `production` (`br-soft-feather-actl671r`) NÃO está marcado como `protected` — sem guarda contra reset/delete acidental. Recomendação pré-cutover: criar um branch-snapshot manual de produção como ponto de restauração explícito (a janela de 6h é curta pra um cutover). |
-| Fronteira dev/produção (Neon) | CONFIGURATION | **VERIFICADO OK** (Fase 5.5.1): `.env` local aponta pro endpoint `ep-polished-queen-…` = branch **dev** (`br-square-glitter-…`). Branch `production` usa endpoint distinto (`ep-odd-lab-…`), nunca presente em `.env` local. Produção sem escrita desde 2026-09-05. |
-| Domínio/HTTPS de produção (Vercel) | CONFIGURATION | **PARCIALMENTE VERIFICADO** (Fase 5.5.1, 1 GET read-only): `https://financas-dashboard-omega.vercel.app` responde HTTP/2, `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`, `server: Vercel`. HTTPS OK. Config de domínio/projeto (branch de produção, build settings) continua `BLOCKED_BY_EXTERNAL_ACCESS`. |
-| Telegram: token/webhook de produção (`getWebhookInfo` read-only) | INFRASTRUCTURE | `BLOCKED_BY_EXTERNAL_ACCESS` — token de bot não disponível nesta sessão (ausente do `.env` local; produção exige acesso Vercel). Só o dono, com o token real, roda `getWebhookInfo` (read-only). |
+| Rate limit não resistente a reset pelo cliente | INFRASTRUCTURE | **RESOLVIDO (código)** — server-authoritative + fail-closed + missing-IP-fail-closed + GC eventual bounded, ver seção 9. Depende de migration em produção (linha abaixo). |
+| **Exposição: dashboard/API financeira de produção acessível anonimamente** | SECURITY_INCIDENT | **CONTIDO na Fase 5.5.2.** Antes: `GET /api/dashboard` → 200 com payload financeiro, sem auth (produção roda código pré-auth). Contenção: Vercel Deployment Protection (`ssoProtection.deploymentType = "all"`) habilitado via API. Depois: `GET /` e `/api/dashboard` (anônimo) → **302 → `vercel.com/sso-api` → `vercel.com/login`**; `POST /api/telegram/webhook` (anônimo) → **401**. Nenhum payload financeiro servido anonimamente. Detalhe: `docs/fase552-production-containment.md`. Fix permanente = cutover V2/auth (5.6). |
+| **Produção roda código PRÉ-AUTENTICAÇÃO (pré-V2)** | CODE_DEPLOYMENT | `origin/main` 61 commits atrás. Toda a auth (5.3C+) e V2 (5.1–5.5) nunca deployadas. Contido (linha acima); corrigido de vez só pelo cutover 5.6. |
+| **Produção está 7 migrations atrás** | PENDING_CUTOVER_MIGRATION | `prisma migrate status` read-only contra `production` (5.5.1, re-confirmado 5.5.2): 5 aplicadas. `PENDING_MIGRATION_RISK_MATRIX` (5.5.2): 6/7 estritamente aditivas (só `ADD COLUMN` nullable / `CREATE TABLE` vazia / `DROP NOT NULL`); a 7ª, `convert_money_fields_to_decimal` (Float→Decimal, 17 colunas), **auditada contra os dados REAIS de produção**: 0 NaN/Inf, 0 overflow de `DECIMAL(12,2)` (máx valor 4937.18), **0 linhas alteradas por ROUND, maxΔ=0.00** → `PRODUCTION_DECIMAL_MIGRATION_SAFE = YES`. Ordem correta. Aplicar via `prisma migrate deploy` só no cutover. |
+| Variáveis de ambiente de produção (Vercel) | CONFIGURATION | **VERIFICADO (5.5.2, `vercel env ls production`)**: presentes só `DATABASE_URL` + `TELEGRAM_TOKEN` (ambos type `sensitive`, 49d). **AUSENTES**: `DIRECT_URL`, `DATABASE_ENV`, `SESSION_SECRET`, `DASHBOARD_PASSWORD_HASH`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_ALLOWED_USER_ID`, `APP_TIMEZONE`. `AUTH_DEV_BYPASS` **ausente = SEGURO** (não é STOP). Os 6 primeiros são pré-requisito de cutover; 4 deles são segredos humanos → `HUMAN_ACTION_REQUIRED` (ver `docs/fase55-cutover-plan.md`). |
+| Backup/PITR do branch de produção (Neon) | INFRASTRUCTURE | **PITR 6h** (`history_retention_seconds=21600`). Branch protection: `BRANCHES_PROTECTED_LIMIT_EXCEEDED` — **indisponível no plano gratuito** (0 protected branches). Mitigação executada na 5.5.2: branch-snapshot manual **`pre-cutover-2026-09-10`** (`br-dark-sound-ac1j9voh`, sem endpoint, CoW, criado do `production` @ LSN `0/34B1B08` — não modifica dados do parent). |
+| Fronteira dev/produção (Neon) | CONFIGURATION | **VERIFICADO OK**: `.env` local → endpoint `ep-polished-queen-…` = branch **dev**. Produção = `ep-odd-lab-…`, distinto. Produção sem escrita desde 2026-09-05 (só as leituras read-only desta fase depois disso). |
+| Domínio/HTTPS de produção (Vercel) | CONFIGURATION | **VERIFICADO** (5.5.2, `vercel project` + API): projeto `financas-dashboard` (`prj_lgNaQ…`), framework `nextjs`, node `24.x`, production branch `main` (GitHub `zerkjesz/financas-dashboard`), `gitForkProtection: true`. HTTPS OK (HTTP/2, HSTS preload). Build/install/output commands = default. |
+| Telegram: `getWebhookInfo` de produção | INFRASTRUCTURE | `HUMAN_ACTION_REQUIRED` — `TELEGRAM_TOKEN` no Vercel é type `sensitive` (write-only): não retornável por `vercel env pull`, API `decrypt=true`, nem CLI. Sem cópia local. O dono roda `curl .../getWebhookInfo` (não contém segredo na saída) e cola o JSON. |
+| Telegram: disponibilidade durante contenção | ACCEPTED_TEMPORARY | `TEMPORARY_TELEGRAM_AVAILABILITY_DURING_CONTAINMENT` = OFFLINE. A Deployment Protection responde 401 aos POSTs do Telegram no webhook. Aceito pelo usuário; bot volta no cutover 5.6 (bypass de proteção pro path do webhook, ou proteção reavaliada após auth deployada). |
 | Telegram: leitura dedicada de 30/60/90 | PRODUCT_DEFERRED | não implementado, non-blocking |
-| `npm audit`: dependências | ACCEPTED_DEPENDENCY_RISK | Fase 5.5.1: **2 RCE críticas do Next.js RESOLVIDAS** (`next` 15.5.21→15.5.25, patch, dentro de `^15.5.0`; build limpo + 42/42 testes). Restam 16 avisos, todos em cadeias não-alcançáveis pelo runtime: cadeia `request`/`@cypress/request`/`node-telegram-bot-api` (form-data CRLF, request SSRF — bot só manda texto pra URL fixa `api.telegram.org`, zero multipart, zero fetch de URL arbitrária) só corrigível via upgrade major `node-telegram-bot-api` 0.66→2.x (fase própria); `postcss`/`nanoid` (build-time, nunca processa input de atacante); `deepmerge-ts`/`prisma` (CLI devDependency, nunca no runtime); `sharp` (CLI + zero uso de `next/image`). `ACCEPTED_TEMPORARY_RISK` documentado por cadeia. |
+| `npm audit`: dependências | ACCEPTED_DEPENDENCY_RISK | **2 RCE críticas do Next.js RESOLVIDAS** (`next` 15.5.21→15.5.25). Restam 16 avisos (2 critical, 6 high, 8 moderate) — nenhum alcançável pelo runtime: cadeia `request`/`@cypress/request`/`node-telegram-bot-api` (form-data CRLF, request SSRF — bot só manda texto pra URL fixa `api.telegram.org`) só via major 0.66→2.x (fase própria); `postcss`/`nanoid` (build-time); `deepmerge-ts`/`prisma` (CLI devDependency); `sharp` (zero `next/image`). Nenhum patch não-breaking novo disponível. `ACCEPTED_TEMPORARY_RISK` por cadeia. |
 
-Nenhum item deste bloco é um defeito de código introduzido nesta fase — são
-gaps de deploy/config/infra externa (produção nunca recebeu o trabalho das
-Fases 5.1–5.5) ou risco de dependência classificado, documentados em vez de
-mascarados.
+Nenhum item deste bloco é um defeito de código introduzido nas Fases 5.5.x —
+são gaps de deploy/config/infra externa (produção nunca recebeu o trabalho
+das Fases 5.1–5.5) ou risco de dependência classificado, documentados em vez
+de mascarados. A exposição de privacidade foi **contida** nesta fase (não é
+mais um risco ativo); a correção definitiva é o cutover 5.6.
 
 ## 12. Setup local
 
