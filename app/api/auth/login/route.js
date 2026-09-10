@@ -39,6 +39,16 @@ export async function POST(request) {
 
   const rateLimitKey = deriveRateLimitKey(request, sessionSecret);
 
+  // MISSING TRUSTED IP (Fase 5.5.1, item 13/14): em produção,
+  // deriveRateLimitKey retorna null quando não há header de IP confiável
+  // (x-vercel-forwarded-for / x-forwarded-for). Sem identidade não dá pra
+  // rate-limitar honestamente — FAIL_CLOSED, nunca cai num bucket global
+  // compartilhado. Copy idêntica ao bloqueio normal (não revela o motivo).
+  if (rateLimitKey === null) {
+    console.error("[auth/login] sem IP confiável para rate limit (produção) — fail-closed.");
+    return NextResponse.json({ error: "too_many_attempts" }, { status: 429 });
+  }
+
   // FAIL_CLOSED (item 13, CRÍTICO): qualquer erro checando o rate limit
   // (DB indisponível, etc.) é tratado como bloqueado — nunca deixa a
   // tentativa passar só porque o enforcement autoritativo falhou. Copy da

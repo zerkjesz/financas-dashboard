@@ -164,14 +164,41 @@ na próxima renda", "+1 renda", "+2 rendas"...), nunca "dia X do mês Y".
     conversa), verificado por teste de aceitação dedicado (cenário [C] de
     `scripts/test-security-ratelimit.mjs`: sequência inteira sem nenhum
     Cookie enviado ou recebido, bloqueio ocorre normalmente).
-  - Sem branch por ambiente dentro do módulo (`lib/auth/rateLimitDb.js`) —
-    mesmo enforcement em dev e produção, nada de fallback client-resettable
-    residual a guardar.
+  - **MISSING TRUSTED IP** (Fase 5.5.1): quando não há header de IP
+    confiável (`x-vercel-forwarded-for` / `x-forwarded-for`),
+    `deriveRateLimitKey` retorna `null` em **produção** — e o handler trata
+    `null` como bloqueio (FAIL_CLOSED, 429 antes de qualquer verificação de
+    senha), nunca cai num bucket global compartilhado. Só em
+    desenvolvimento existe um bucket sintético de conveniência
+    (`dev-local-no-ip`), guardado por `isProductionRuntime()` — nunca ativo
+    em produção. Na prática o FAIL_CLOSED quase nunca dispara: a Vercel
+    sempre seta `x-forwarded-for` pra tráfego real que passa pela borda
+    dela; `null` significaria requisição chegando por um caminho anômalo.
+  - **STORAGE BOUNDEDNESS** (Fase 5.5.1): a expiração da janela (1h) é
+    lógica; a limpeza FÍSICA é feita por `sweepExpired()` — um único
+    `DELETE ... WHERE ctid IN (SELECT ctid ... LIMIT 100)`, oportunista (a
+    cada `recordFailure`), atômico e BOUNDED (nunca full-table delete numa
+    request de login), best-effort (um erro na limpeza nunca afeta a
+    decisão de rate limit). Sem isso, cada IP distinto que errasse o login
+    uma vez deixaria uma linha permanente (storage amplification sob ataque
+    distribuído). `clearAttempts` (login bem-sucedido) já remove a linha
+    fisicamente.
+  - **DISTRIBUTED_ROTATING_IP_RESISTANCE = NO** (risco residual aceito):
+    rate limit por IP não impede um atacante com muitos IPs distintos. Para
+    um app pessoal single-user isso é risco residual aceitável — o segredo
+    real é um hash `scrypt` de uma senha que só o dono conhece, e
+    fingerprint invasivo / WAF novo seria desproporcional. Documentado, não
+    mascarado.
   - `lib/auth/rateLimit.js` (o limitador antigo em cookie) foi REMOVIDO
     nesta fase — decisão explícita de não manter como defense-in-depth
     (duas máquinas de estado independentes seria complexidade real por um
     ganho marginal, já que o novo enforcement é autoritativo e
     fail-closed).
+  - **Camadas de prontidão** (não colapsar num único "pronto"):
+    `RATE_LIMIT_CODE_READY = YES` · `RATE_LIMIT_SCHEMA_READY_IN_DEV = YES`
+    (migration `20260909184113_login_rate_limit` aplicada no branch dev) ·
+    `RATE_LIMIT_SCHEMA_READY_IN_PRODUCTION = NO` (produção não tem a tabela
+    — ver seção 11) · `RATE_LIMIT_PRODUCTION_READY = NO / CONDITIONAL_ON_MIGRATION`.
 
 ## 10. Fronteira dev/produção
 
@@ -184,19 +211,26 @@ completo (inclui `DIRECT_URL`, adicionado na Fase 5.4F.1).
 
 ## 11. Blockers conhecidos de pré-produção
 
+Estado após a Fase 5.5.1 (inspeção read-only real de Neon + do deployment
+de produção; Vercel/Telegram continuam sem acesso autenticado).
+
 | Item | Tipo | Status |
 |---|---|---|
-| Rate limit não resistente a reset pelo cliente | INFRASTRUCTURE | **RESOLVIDO na Fase 5.5** — enforcement server-authoritative em Postgres, ver seção 9 |
-| Variáveis de ambiente de produção (Vercel) | CONFIGURATION | `BLOCKED_BY_EXTERNAL_ACCESS` — sem sessão Vercel autenticada nesta máquina/sessão (`vercel whoami` confirmado sem token válido, Fase 5.5). Verificação real exige: dono da conta rodar `vercel env ls production` (ou abrir o dashboard) e confirmar presença/consistência de `SESSION_SECRET`, `DASHBOARD_PASSWORD_HASH`, `DATABASE_URL`, `DIRECT_URL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_ALLOWED_USER_ID` — nomes apenas, nunca valores |
-| `DIRECT_URL` em produção | CONFIGURATION | `BLOCKED_BY_EXTERNAL_ACCESS` — mesma verificação acima |
-| Backup/PITR do branch de produção (Neon) | INFRASTRUCTURE | `BLOCKED_BY_EXTERNAL_ACCESS` — `neonctl` exige OAuth interativo no navegador (confirmado, timeout de autenticação na Fase 5.5); dono da conta precisa confirmar no console Neon se PITR está habilitado pro branch `main` e qual a janela de retenção |
-| Domínio/HTTPS de produção (Vercel) | CONFIGURATION | `BLOCKED_BY_EXTERNAL_ACCESS` — mesma causa do item de env vars |
-| Telegram: token/webhook de produção (`getWebhookInfo` read-only) | INFRASTRUCTURE | `BLOCKED_BY_EXTERNAL_ACCESS` — nem token de bot está disponível nesta sessão (confirmado ausente até do `.env` local de dev); só o dono, com o token real, pode rodar a checagem read-only |
+| Rate limit não resistente a reset pelo cliente | INFRASTRUCTURE | **RESOLVIDO (código)** na Fase 5.5/5.5.1 — enforcement server-authoritative + bounded + fail-closed em Postgres, ver seção 9. Depende de migration em produção (linha abaixo). |
+| **Produção roda código PRÉ-AUTENTICAÇÃO (pré-V2)** | CODE_DEPLOYMENT | **CRÍTICO, PENDENTE.** `origin/main` está 61 commits atrás do local. Inspeção read-only de `https://financas-dashboard-omega.vercel.app` na Fase 5.5.1: `/login` → 404, `/api/dashboard` → **200 com payload financeiro completo, SEM autenticação**. Toda a camada de auth (Fases 5.3C+) e toda a arquitetura V2 (Fases 5.1–5.5) nunca foram para produção. A API financeira de produção está pública. Corrigido só pelo cutover da Fase 5.6 (deploy do bundle de 61 commits). |
+| **Produção está 7 migrations atrás** | PENDING_PRODUCTION_MIGRATION | `prisma migrate status` read-only contra o branch `production` do Neon (Fase 5.5.1): só as 5 primeiras migrations aplicadas. Pendentes: `convert_money_fields_to_decimal` (Float→Decimal, TYPE CHANGE — precisa re-rodar a auditoria da Fase 3.0 contra os dados REAIS de produção antes do cutover), `appsettings_dataconfidence`, `domain_models_v2`, `income_recurring_occurrence_date`, `external_installment_due_timing`, `telegram_update_receipt`, `login_rate_limit`. 6 das 7 são estritamente aditivas/seguras; só a de Decimal exige validação prévia. Ordem já correta (timestamp-prefix). Aplicar via `prisma migrate deploy` no cutover — nunca antes. |
+| Variáveis de ambiente de produção (Vercel) | CONFIGURATION | `BLOCKED_BY_EXTERNAL_ACCESS` — `vercel whoami` → "Logged out" (Fase 5.5.1). Exige `vercel login` do dono + `vercel env ls production` pra confirmar `SESSION_SECRET`, `DASHBOARD_PASSWORD_HASH`, `DATABASE_URL`, `DIRECT_URL`, `TELEGRAM_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_ALLOWED_USER_ID` presentes; e `AUTH_DEV_BYPASS` ausente/falsy, `DATABASE_ENV` semanticamente de produção (ambos são STOP/CRITICAL se errados) — nomes apenas, nunca valores |
+| Backup/PITR do branch de produção (Neon) | INFRASTRUCTURE | **PARCIALMENTE VERIFICADO** (Fase 5.5.1, `neonctl` read-only): projeto `cool-firefly-30627522`, `history_retention_seconds = 21600` → **PITR de 6h** (default de plano gratuito). O branch `production` (`br-soft-feather-actl671r`) NÃO está marcado como `protected` — sem guarda contra reset/delete acidental. Recomendação pré-cutover: criar um branch-snapshot manual de produção como ponto de restauração explícito (a janela de 6h é curta pra um cutover). |
+| Fronteira dev/produção (Neon) | CONFIGURATION | **VERIFICADO OK** (Fase 5.5.1): `.env` local aponta pro endpoint `ep-polished-queen-…` = branch **dev** (`br-square-glitter-…`). Branch `production` usa endpoint distinto (`ep-odd-lab-…`), nunca presente em `.env` local. Produção sem escrita desde 2026-09-05. |
+| Domínio/HTTPS de produção (Vercel) | CONFIGURATION | **PARCIALMENTE VERIFICADO** (Fase 5.5.1, 1 GET read-only): `https://financas-dashboard-omega.vercel.app` responde HTTP/2, `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`, `server: Vercel`. HTTPS OK. Config de domínio/projeto (branch de produção, build settings) continua `BLOCKED_BY_EXTERNAL_ACCESS`. |
+| Telegram: token/webhook de produção (`getWebhookInfo` read-only) | INFRASTRUCTURE | `BLOCKED_BY_EXTERNAL_ACCESS` — token de bot não disponível nesta sessão (ausente do `.env` local; produção exige acesso Vercel). Só o dono, com o token real, roda `getWebhookInfo` (read-only). |
 | Telegram: leitura dedicada de 30/60/90 | PRODUCT_DEFERRED | não implementado, non-blocking |
-| `npm audit`: 16 vulnerabilidades em 4 cadeias de dependência | INFRASTRUCTURE | Auditado com matriz de risco na Fase 5.5 (ver relatório da fase) — 13/16 têm fix não-destrutivo disponível (não aplicado nesta fase, pendente de autorização); 3/16 (uuid/@cypress/request/node-telegram-bot-api) só via upgrade major do `node-telegram-bot-api` (0.66→2.x, breaking change) — `ACCEPTED_TEMPORARY_RISK`, migração é fase própria |
+| `npm audit`: dependências | ACCEPTED_DEPENDENCY_RISK | Fase 5.5.1: **2 RCE críticas do Next.js RESOLVIDAS** (`next` 15.5.21→15.5.25, patch, dentro de `^15.5.0`; build limpo + 42/42 testes). Restam 16 avisos, todos em cadeias não-alcançáveis pelo runtime: cadeia `request`/`@cypress/request`/`node-telegram-bot-api` (form-data CRLF, request SSRF — bot só manda texto pra URL fixa `api.telegram.org`, zero multipart, zero fetch de URL arbitrária) só corrigível via upgrade major `node-telegram-bot-api` 0.66→2.x (fase própria); `postcss`/`nanoid` (build-time, nunca processa input de atacante); `deepmerge-ts`/`prisma` (CLI devDependency, nunca no runtime); `sharp` (CLI + zero uso de `next/image`). `ACCEPTED_TEMPORARY_RISK` documentado por cadeia. |
 
-Nenhum destes é um defeito de código — são gaps de infraestrutura/config
-externa ou escopo deliberadamente adiado, documentados em vez de mascarados.
+Nenhum item deste bloco é um defeito de código introduzido nesta fase — são
+gaps de deploy/config/infra externa (produção nunca recebeu o trabalho das
+Fases 5.1–5.5) ou risco de dependência classificado, documentados em vez de
+mascarados.
 
 ## 12. Setup local
 
