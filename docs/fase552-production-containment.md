@@ -52,14 +52,37 @@ protegia o domínio de produção `*.vercel.app`).
 
 ## EFEITO COLATERAL ACEITO — Telegram
 
-Com Deployment Protection em "All Deployments", os POSTs do Telegram para
-`/api/telegram/webhook` recebem 401. O bot fica **offline para updates
-recebidos** até o cutover (Fase 5.6). Aceito explicitamente pelo usuário —
-privacidade financeira tem prioridade. Nenhum `setWebhook`/`deleteWebhook`
-foi executado; a configuração do webhook no lado do Telegram permanece
-intacta, só bloqueada na borda da Vercel.
+Com Deployment Protection em "All Deployments", os POSTs para
+`/api/telegram/webhook` recebem 401. Aceito explicitamente pelo usuário.
+Nenhum `setWebhook`/`deleteWebhook` executado.
 
-`TEMPORARY_TELEGRAM_AVAILABILITY_DURING_CONTAINMENT = OFFLINE (aceito)`.
+**Update 5.5.3**: `getWebhookInfo` (read-only, token do `.env` local — bot
+único, `getMe` confirmou token válido/ativo) mostrou que **não há webhook
+nenhum configurado** (`WEBHOOK_CONFIGURED=false`, `pending_update_count=0`,
+sem `last_error`). Ou seja, o bot já estava sem receber updates por webhook
+antes da contenção. Não há webhook legado a preservar ou reverter — no
+cutover, `setWebhook` será a configuração inicial.
+
+`TEMPORARY_TELEGRAM_AVAILABILITY_DURING_CONTAINMENT = OFFLINE_BY_CONTAINMENT (aceito; e não havia webhook mesmo)`.
+
+## Update 5.5.3 — provisionamento de secrets de produção
+
+Além da contenção, a Fase 5.5.3 provisionou (via `vercel env add`, todas
+`sensitive`, sem efeito no deployment atual):
+
+- `SESSION_SECRET` — `crypto.randomBytes(48)` → 96 hex (segredo técnico,
+  sem escolha humana).
+- `TELEGRAM_WEBHOOK_SECRET` — `crypto.randomBytes(32)` → 64 hex.
+- `DASHBOARD_PASSWORD_HASH` — passphrase forte gerada por CSPRNG (base32
+  Crockford, ~93 bits), hasheada com `lib/auth/password.js:hashPassword`
+  (scrypt), round-trip verificado localmente. **A passphrase em texto puro
+  está SÓ no macOS login keychain** (serviço `norte-dashboard-prod`, conta
+  `rcn.dados@gmail.com`) — nunca em repo/doc/log. Recuperar:
+  `security find-generic-password -s norte-dashboard-prod -w`.
+
+Nenhum secret aparece neste documento. `SENSITIVE_ENV_AVAILABLE_TO_ENV_RUN
+= NO` (provado empiricamente: `vercel env run` responde "Secret values
+cannot be pulled").
 
 ## PERMANENT_FIX
 
