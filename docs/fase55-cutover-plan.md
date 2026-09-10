@@ -74,12 +74,12 @@ inventário de env.
 
 Resta pro cutover (5.6):
 
-1. **Setar as env vars de produção faltantes** (`vercel env add ... production`):
-   - **Deriváveis / de contrato** (o executor do cutover pode setar):
-     `DIRECT_URL` (connection string do endpoint `production` do Neon
-     **sem** `-pooler` — mesmo DB lógico de `DATABASE_URL`),
-     `DATABASE_ENV=production`, `APP_TIMEZONE=America/Sao_Paulo`.
-   - **Segredos humanos** (`HUMAN_ACTION_REQUIRED` — só o dono):
+1. **Env vars de produção**:
+   - **JÁ SETADAS na 5.5.2** (`vercel env add`): `DIRECT_URL` (endpoint
+     `production` do Neon, unpooled), `DATABASE_ENV=production`,
+     `APP_TIMEZONE=America/Sao_Paulo`. `DATABASE_URL`/`TELEGRAM_TOKEN` já
+     existiam.
+   - **AINDA FALTAM — `HUMAN_ACTION_REQUIRED`** (segredos, não inventáveis):
      `SESSION_SECRET` (gerar: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`),
      `DASHBOARD_PASSWORD_HASH` (`node scripts/generate-password-hash.mjs "<senha>"`),
      `TELEGRAM_WEBHOOK_SECRET` (string aleatória longa),
