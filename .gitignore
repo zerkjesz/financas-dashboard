@@ -15,3 +15,4 @@ scripts/snapshot-reports/
 # Fase 5.3A — targets canônicos reais (valores financeiros pessoais), usados só
 # em runtime pelo acceptance harness read-only, nunca versionados.
 scripts/fase53a-targets.local.json
+scripts/lib/.bootstrap-authorized.json
