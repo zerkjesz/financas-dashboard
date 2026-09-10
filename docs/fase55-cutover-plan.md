@@ -74,20 +74,19 @@ inventário de env.
 
 Resta pro cutover (5.6):
 
-1. **Env vars de produção** — **9 das 10 já provisionadas (5.5.2 + 5.5.3)**:
+1. **Env vars de produção** — **TODAS AS 9 REQUERIDAS PROVISIONADAS** (5.5.2 → 5.5.4):
    - `DATABASE_URL`, `TELEGRAM_TOKEN` (pré-existentes, 49d).
    - `DIRECT_URL`, `DATABASE_ENV=production`, `APP_TIMEZONE=America/Sao_Paulo` (5.5.2).
    - `SESSION_SECRET` (CSPRNG 96 hex), `DASHBOARD_PASSWORD_HASH` (scrypt via
      helper do app, round-trip verificado — **passphrase no macOS keychain**:
      `security find-generic-password -s norte-dashboard-prod -w`),
-     `TELEGRAM_WEBHOOK_SECRET` (CSPRNG 64 hex) — todos 5.5.3.
+     `TELEGRAM_WEBHOOK_SECRET` (CSPRNG 64 hex) — 5.5.3.
+   - `TELEGRAM_ALLOWED_USER_ID` (5.5.4 — capturado via challenge `getUpdates`,
+     `from.id` de chat privado, validado com `isAuthorizedTelegramSender`).
    - `AUTH_DEV_BYPASS`: **ausente** (correto).
-   - **FALTA 1 — `HUMAN_ACTION_REQUIRED_FINAL`**: `TELEGRAM_ALLOWED_USER_ID`
-     — o `from.id` numérico do dono no Telegram (pegar com @userinfobot ou
-     @RawDataBot). Não é gerável, nenhuma fonte acessível tem o valor real.
-     **Não bloqueia o deploy web/auth** (o bot rejeita todo mundo, fail-closed,
-     até esse id ser setado — pode ser feito pós-cutover com
-     `vercel env add TELEGRAM_ALLOWED_USER_ID production`).
+   - Nota: as 9 são type `sensitive` → ilegíveis por CLI/API/`env run`. Prova
+     de correção é por construção (geração conforme spec + round-trip do hash)
+     e pelo smoke test de login no passo 6.
 2. `prisma migrate status` contra produção (read-only) — reconfirmar as 7 pendentes.
 3. `prisma migrate deploy` contra produção — aplica as 7 na ordem (precisa de
    `DIRECT_URL` do passo 1). **Nunca `db push`, nunca `migrate dev` contra produção.**
@@ -96,14 +95,16 @@ Resta pro cutover (5.6):
    `numeric`).
 5. **SÓ ENTÃO** promover/deployar o bundle de código (61 commits).
 6. Rodar o smoke plan (seção 2) inteiro.
-7. **Telegram**: (a) setar `TELEGRAM_ALLOWED_USER_ID`; (b) configurar um
-   **Protection Bypass** da Vercel só pro path `/api/telegram/webhook`; (c)
-   **`setWebhook`** (configuração INICIAL — `getWebhookInfo` na 5.5.3 confirmou
-   que não há webhook nenhum configurado hoje) apontando pra
+7. **Telegram**: (a) configurar um **Protection Bypass** da Vercel só pro path
+   `/api/telegram/webhook`; (b) **`setWebhook`** (configuração INICIAL —
+   `getWebhookInfo` na 5.5.3/5.5.4 confirmou que não há webhook nenhum
+   configurado hoje) apontando pra
    `https://financas-dashboard-omega.vercel.app/api/telegram/webhook` com
    `secret_token` = `TELEGRAM_WEBHOOK_SECRET`. Rodar de dentro de uma function
    deployada (recebe o token `sensitive` em runtime) ou o dono roda manual —
-   `vercel env run` NÃO expõe vars `sensitive` (provado na 5.5.3).
+   `vercel env run` NÃO expõe vars `sensitive` (provado na 5.5.3). Todas as
+   env Telegram (`TELEGRAM_TOKEN`/`TELEGRAM_WEBHOOK_SECRET`/`TELEGRAM_ALLOWED_USER_ID`)
+   já estão em produção — `TELEGRAM_CUTOVER_CAPABILITY = YES`.
 
 A `LoginRateLimit` migration DEVE preceder o deploy do código de login: sem
 a tabela, `isBlocked`/`recordFailure` lançam → o handler FAIL_CLOSED
@@ -148,17 +149,16 @@ ficam explicitamente reservados pra Fase 5.6 — não executar como parte da
 
 ## 4. RELEASE_CANDIDATE_COMMIT
 
-O commit que fecha a Fase 5.5.3 é o `RELEASE_CANDIDATE_CODE_COMMIT` desta
-rodada — build limpo (`next@15.5.25`), regressão completa verde,
-fingerprint financeiro idêntico ao baseline (`PRE_553 == POST_553`), leak
-scan limpo. **É candidato de CÓDIGO — não de deploy: o cutover ainda
-depende de `TELEGRAM_ALLOWED_USER_ID` + as 7 migrations (seção 1b).**
+O commit que fecha a Fase 5.5.4 (docs) é o tip; o
+`RELEASE_CANDIDATE_CODE_COMMIT` continua `7639386` (último com mudança de
+source — 5.5.3/5.5.4 são docs + env externo). Build limpo (`next@15.5.25`),
+regressão completa verde, `PRE_554 == POST_554 == baseline`, leak scan
+limpo. **É candidato de CÓDIGO — o deploy em si é a Fase 5.6.**
 
 ## 5. PREPRODUCTION_BLOCKER_MATRIX
 
-Ver seção 11 (`Blockers conhecidos de pré-produção`) de
-`docs/final-architecture.md` — matriz autoritativa e única. Resumo ao fim
-da Fase 5.5.3, por classificação:
+**`FASE_5_5_PREPRODUCTION_INFRA_READY = YES`** ao fim da 5.5.4. Sem
+`HUMAN_ACTION_REQUIRED` pendente. Resumo:
 
 - **RESOLVIDO (código)**: rate limit → server-authoritative + fail-closed +
   missing-IP-fail-closed + GC eventual bounded. 2 RCE críticas do Next.js →
@@ -167,15 +167,10 @@ da Fase 5.5.3, por classificação:
   Deployment Protection "all". Fix definitivo = cutover.
 - **PENDING_CUTOVER_MIGRATION**: 7 migrations pendentes (6 aditivas; a de
   Decimal **auditada segura contra dados de produção**).
-- **PROVISIONADO (5.5.2 + 5.5.3)**: 9 das 10 env vars de produção
-  (`DATABASE_URL`, `TELEGRAM_TOKEN`, `DIRECT_URL`, `DATABASE_ENV`,
-  `APP_TIMEZONE`, `SESSION_SECRET`, `DASHBOARD_PASSWORD_HASH`,
-  `TELEGRAM_WEBHOOK_SECRET`; `AUTH_DEV_BYPASS` ausente = seguro). Domínio/
-  projeto/HTTPS OK; fronteira dev/prod OK; PITR 6h; backup snapshot;
-  `getWebhookInfo` = sem webhook configurado.
-- **`HUMAN_ACTION_REQUIRED_FINAL` (1 item)**: `TELEGRAM_ALLOWED_USER_ID` —
-  `from.id` numérico do dono no Telegram. Não gerável, sem fonte acessível.
-  Não bloqueia o deploy web/auth.
+- **PROVISIONADO (5.5.2 → 5.5.4)**: **todas as 9 env vars requeridas de
+  produção** + `AUTH_DEV_BYPASS` ausente (seguro). Domínio/projeto/HTTPS OK;
+  fronteira dev/prod OK; PITR 6h; backup snapshot `pre-cutover-2026-09-10`;
+  `getWebhookInfo` = sem webhook; `TELEGRAM_CUTOVER_CAPABILITY = YES`.
 - **NOT_AVAILABLE_ON_PLAN**: Neon branch protection (plano gratuito = 0
   protected branches) — mitigado pelo snapshot manual.
 - **`ACCEPTED_DEPENDENCY_RISK`**: cadeia `request`/`node-telegram-bot-api`

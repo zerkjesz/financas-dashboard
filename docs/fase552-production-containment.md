@@ -84,6 +84,19 @@ Nenhum secret aparece neste documento. `SENSITIVE_ENV_AVAILABLE_TO_ENV_RUN
 = NO` (provado empiricamente: `vercel env run` responde "Secret values
 cannot be pulled").
 
+## Update 5.5.4 — TELEGRAM_ALLOWED_USER_ID capturado
+
+O `from.id` do dono foi obtido **pelo próprio bot**, sem painel/curl/@bots
+externos: challenge aleatório `NORTE-VERIFY-…` gerado localmente, o dono
+enviou exatamente essa string ao bot, `getUpdates` (read-only, autorizado só
+pra esta identificação) achou a update em chat privado, `from.id` extraído,
+validado com `lib/auth/telegramSecurity.js:isAuthorizedTelegramSender`
+(autoriza o próprio id, nega id diferente, nega null), e provisionado como
+`vercel env add TELEGRAM_ALLOWED_USER_ID production --sensitive`. O id nunca
+foi impresso em terminal/doc/commit/log. `TELEGRAM_VERIFICATION_UPDATE_HANDLING`:
+`offset` avançado só sobre a update do challenge (0 updates posteriores
+existiam). Nenhum `sendMessage`/`setWebhook`/lançamento.
+
 ## PERMANENT_FIX
 
 Cutover da Fase 5.6: deploy do código V2/auth (os 61 commits) + as 7
