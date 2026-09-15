@@ -657,6 +657,95 @@ model AppSettings {
   updatedAt DateTime @updatedAt
 }
 
+// ============================================================================
+// Fase 6.0 (Design Freeze) — DATA HUB (área "Dados": exportar/importar).
+// Infraestrutura NOVA, aditiva, NÃO-FINANCEIRA por si só (não guarda saldo/
+// receita/despesa — só metadados de operações e o material de um import
+// ainda não confirmado). Nenhum model financeiro existente foi alterado.
+// ============================================================================
+
+// Log de atividade — "Atividade de dados" na UI. Uma linha por operação real
+// (export concluído, import pré-visualizado, aplicado, com falha, desfeito).
+enum DataOperationType {
+  EXPORT
+  IMPORT_PREVIEW
+  IMPORT_APPLY
+  IMPORT_FAILED
+  IMPORT_UNDO
+}
+
+enum DataOperationStatus {
+  SUCCESS
+  FAILED
+  PARTIAL
+}
+
+model DataOperation {
+  id            String              @id @default(cuid())
+  type          DataOperationType
+  status        DataOperationStatus
+  // Import apenas: "adicionar" | "atualizar" | "substituir" (nunca um modo
+  // novo além dos 3 do design aprovado — ver lib/dataHub/modes.js).
+  mode          String?
+  // Chaves de dataset envolvidas (ver lib/dataHub/sheets.js) — nunca nome de
+  // tabela Prisma cru, sempre a chave estável do catálogo.
+  datasets      String[]
+  fileName      String?
+  fileHash      String?
+  createdCount  Int                 @default(0)
+  updatedCount  Int                 @default(0)
+  skippedCount  Int                 @default(0)
+  conflictCount Int                 @default(0)
+  deletedCount  Int                 @default(0)
+  errorMessage  String?
+  importBatchId String?             @unique
+  importBatch   ImportBatch?        @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  createdAt     DateTime            @default(now())
+
+  @@index([createdAt])
+}
+
+// Um upload de importação, do preview até o apply (ou expiração/undo).
+// `rows`/`plan`/`planFingerprint`/`preimages` são JSON de propósito — são
+// material de TRABALHO de uma operação em andamento (nunca uma segunda
+// fonte de verdade financeira; os registros reais só existem nas tabelas
+// próprias depois do apply). `planFingerprint` é o mecanismo de
+// concorrência otimista (item 53 do pedido): se o estado real mudou entre
+// preview e apply, o apply aborta em vez de aplicar um plano velho.
+enum ImportBatchStatus {
+  PENDING_APPLY
+  APPLIED
+  UNDONE
+  EXPIRED
+  ABORTED
+}
+
+model ImportBatch {
+  id              String            @id @default(cuid())
+  fileName        String
+  fileHash        String
+  mode            String
+  datasets        String[]
+  rows            Json
+  plan            Json
+  planFingerprint Json
+  resolutions     Json?
+  // Snapshot PRÉ-apply de cada linha realmente tocada (create/update/delete)
+  // — a base do undo de 24h (item 58/59 do pedido: a promessa "dá para
+  // desfazer" só existe porque isto é gravado ANTES do apply commitar).
+  preimages       Json?
+  status          ImportBatchStatus @default(PENDING_APPLY)
+  appliedAt       DateTime?
+  undoneAt        DateTime?
+  createdAt       DateTime          @default(now())
+  expiresAt       DateTime
+  undoDeadline    DateTime?
+
+  dataOperation   DataOperation?
+
+  @@index([status, createdAt])
+}
+
 // Tabela `Transaction` original, renomeada — arquivo permanente, a app não escreve mais nela.
 // Fase 5.3C.1 — idempotência DURÁVEL por Telegram update_id. NÃO-financeiro
 // (infra do bot, mesma categoria de PendingBotMessage/BotWizardSession) —
