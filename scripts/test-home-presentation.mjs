@@ -120,18 +120,37 @@ check(selectCriticalBannerReason([]) === null, "statusReasons vazio -> nenhum ba
 //    importa lib/indicators.js, lib/intelligence.js, lib/alerts.js ou
 //    lib/cashFlowProjection.js. ONE_TRUTH_ONE_NAME (item 48) — nenhum deles
 //    reintroduz o vocabulário V1 ("Caixa livre"/"Patrimônio disponível").
+//
+// Fase 6.0 (Design Freeze) — a Home foi revestida sobre a identidade final
+// do ZIP aprovado (hero "Dá para gastar hoje" + bridge chart + tiras/cards
+// novos); a MESMA hierarquia de decisão da 5.4C continua valendo (ver
+// comentário no topo de Dashboard.jsx), só a composição de arquivos mudou.
+// Lista atualizada pros componentes atuais — FinancialHero/NextIncomeCard/
+// PhysicalMoneyContext/SpendingSection/ProjectionSummary foram REMOVIDOS
+// (superseded), não sobrevivem como arquivo nem como import.
 // ==========================================================================
 const NEW_HOME_FILES = [
   "lib/homePresentation.js",
   "app/components/Dashboard.jsx",
+  "app/components/dashboard/SpendableTodayCard.jsx",
+  "app/components/dashboard/MoneyBridgeCard.jsx",
+  "app/components/dashboard/NotSpendableStrip.jsx",
+  "app/components/dashboard/WeightedPressuresCard.jsx",
+  "app/components/dashboard/NextIncomeSpotlight.jsx",
+  "app/components/dashboard/UpcomingEventsCard.jsx",
+  "app/components/dashboard/RiskSurface.jsx",
+  "app/components/ui/Disclosure.jsx",
+];
+const REMOVED_HOME_FILES = [
   "app/components/dashboard/FinancialHero.jsx",
   "app/components/dashboard/NextIncomeCard.jsx",
-  "app/components/dashboard/RiskSurface.jsx",
   "app/components/dashboard/PhysicalMoneyContext.jsx",
   "app/components/dashboard/SpendingSection.jsx",
   "app/components/dashboard/ProjectionSummary.jsx",
-  "app/components/ui/Disclosure.jsx",
 ];
+for (const relPath of REMOVED_HOME_FILES) {
+  check(!fs.existsSync(path.join(ROOT, relPath)), `SUPERSEDED_FILE_GONE: ${relPath} não existe mais (substituído na Fase 6.0)`);
+}
 const V1_IMPORT_RE = /lib\/(indicators|intelligence|alerts|cashFlowProjection)(\.js)?["']/;
 // Remove comentários (// linha, /* bloco */, {/* JSX */}) antes de checar
 // vocabulário — o código legitimamente CITA "Caixa livre"/"Patrimônio

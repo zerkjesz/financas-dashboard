@@ -28,17 +28,17 @@ console.log("--- Fase 5.4B: Design Foundation ---\n");
 // ==========================================================================
 // 1) Nav config — comportamento, não snapshot.
 // ==========================================================================
-// Fase 5.4D, item 6 — NAV_ITEMS cresceu de 5 pra 7 rotas reais (Compromissos/
-// Fluxo/Histórico), e "Mais" passou de 1 item (só Metas) pra 3 (Fluxo/
-// Histórico/Metas) — mudança intencional e aprovada desta fase, não um
-// achado stale. Asserções abaixo atualizadas pra refletir a nav real de
-// agora (nunca reintroduzir a contagem antiga da 5.4B como se fosse bug).
-check(NAV_ITEMS.length === 7, "NAV_ITEMS tem as 7 rotas reais de hoje (Fase 5.4D)", `${NAV_ITEMS.length}`);
+// Fase 6.0 (Design Freeze) — NAV_ITEMS ganhou "Dados" (8ª rota) e "Fluxo"
+// virou "Projeção" (nome final do design aprovado, mesma posição/papel) —
+// mudança intencional desta fase, não um achado stale. "Mais" passa de 3
+// pra 4 itens (Projeção/Histórico/Metas/Dados).
+check(NAV_ITEMS.length === 8, "NAV_ITEMS tem as 8 rotas reais de hoje (Fase 6.0 — + Dados)", `${NAV_ITEMS.length}`);
 check(NAV_ITEMS.every((i) => i.href && i.label && i.mobileLabel && i.icon), "todo NAV_ITEM tem href/label/mobileLabel/icon");
 check(MOBILE_PRIMARY_ITEMS.length === 4, "item 24: exatamente 4 itens primários na bottom nav (Hoje/Cartão/Compromissos/Simular)", `${MOBILE_PRIMARY_ITEMS.length}`);
 check(
-  MOBILE_MORE_ITEMS.length === 3 && MOBILE_MORE_ITEMS.map((i) => i.key).join(",") === "fluxo,historico,metas",
-  "Fase 5.4D: Fluxo/Histórico/Metas dentro de 'Mais'"
+  MOBILE_MORE_ITEMS.length === 4 && MOBILE_MORE_ITEMS.map((i) => i.key).join(",") === "projecao,historico,metas,dados",
+  "Fase 6.0: Projeção/Histórico/Metas/Dados dentro de 'Mais'",
+  MOBILE_MORE_ITEMS.map((i) => i.key).join(",")
 );
 check(
   MOBILE_PRIMARY_ITEMS.map((i) => i.key).join(",") === "home,cartoes,compromissos,simulador",
@@ -66,23 +66,27 @@ const REQUIRED_TOKENS = [
 for (const token of REQUIRED_TOKENS) {
   check(css.includes(`${token}:`), `token semântico presente: ${token}`);
 }
-// Tokens LEGADOS preservados com o MESMO valor (item 33 — zero mudança de
-// cor pra componente existente).
-const LEGACY_UNCHANGED = [
-  ["--color-bg", "#020617"],
-  ["--color-surface", "#0f172a"],
-  ["--color-surface-2", "#1e293b"],
-  ["--color-border", "#1e293b"],
-  ["--color-border-strong", "#334155"],
-  ["--color-muted", "#94a3b8"],
-  ["--color-positive", "#22c55e"],
-  ["--color-negative", "#f87171"],
-  ["--color-warning", "#fbbf24"],
-  ["--color-info", "#38bdf8"],
+// Fase 6.0 (Design Freeze) — SUBSTITUI a checagem "token legado inalterado"
+// da 5.4B. Esta fase é DELIBERADAMENTE um big-bang de identidade visual
+// (aprovado no ZIP) — o princípio de "zero mudança de cor pra componente
+// existente" da 5.4B foi conscientemente superado, não violado por engano.
+// O que agora precisamos garantir é o INVERSO: os valores da identidade
+// FINAL aprovada estão nos tokens certos (nunca hardcoded por 100
+// componentes — item 7 do pedido geral) e não regridem de volta pro tema
+// escuro antigo por acidente.
+const FROZEN_PALETTE = [
+  ["--color-bg", "#eff0f2"],
+  ["--color-surface", "#ffffff"],
+  ["--color-ink", "#0b0b0c"],
+  ["--color-accent", "#c9ff29"],
+  ["--color-text-primary", "#0b0b0c"],
+  ["--color-text-secondary", "#565c63"],
+  ["--color-text-muted", "#6e747b"],
 ];
-for (const [token, value] of LEGACY_UNCHANGED) {
-  check(css.includes(`${token}: ${value};`), `token legado INALTERADO: ${token} = ${value}`);
+for (const [token, value] of FROZEN_PALETTE) {
+  check(css.includes(`${token}: ${value};`), `token da identidade final (Fase 6.0): ${token} = ${value}`);
 }
+check(!css.includes("color-scheme: dark"), "NUNCA regride pro dark mode antigo (color-scheme: light, single-theme)");
 check(css.includes(".focus-ring") && css.includes(":focus-visible"), "sistema de foco (.focus-ring + :focus-visible) presente");
 check(css.includes("prefers-reduced-motion"), "regra prefers-reduced-motion presente");
 check(css.includes("env(safe-area-inset-bottom"), "safe-area-inset-bottom tratado (mobile nav)");
@@ -108,15 +112,19 @@ function contrast(hex1, hex2) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 const WCAG_AA_NORMAL = 4.5;
+// Fase 6.0 (Design Freeze) — pares da identidade final aprovada (canvas
+// off-white, ink quase-preto, lime accent). Medido de verdade, não "parece
+// legível" — ver docs/design-tokens.md pro racional de cada par.
 const CONTRAST_PAIRS = [
-  ["text-primary/bg", "#f8fafc", "#020617"],
-  ["text-secondary/surface-2", "#cbd5e1", "#1e293b"],
-  ["text-muted/surface", "#94a3b8", "#0f172a"],
-  ["accent-foreground/accent", "#1c1207", "#d99a3d"],
-  ["danger/surface", "#f87171", "#0f172a"],
-  ["warning/surface", "#fbbf24", "#0f172a"],
-  ["restricted/surface", "#a78bda", "#0f172a"],
-  ["positive/surface", "#22c55e", "#0f172a"],
+  ["text-primary/bg", "#0b0b0c", "#eff0f2"],
+  ["text-primary/surface", "#0b0b0c", "#ffffff"],
+  ["text-secondary/surface", "#565c63", "#ffffff"],
+  ["text-muted/surface", "#6e747b", "#ffffff"],
+  ["accent-foreground/accent", "#0b0b0c", "#c9ff29"],
+  ["danger-text/danger-bg", "#5e3d0c", "#f6eee2"],
+  ["restricted/surface", "#565c63", "#ffffff"],
+  ["positive/surface", "#2e6f4e", "#ffffff"],
+  ["white/ink", "#ffffff", "#0b0b0c"],
 ];
 for (const [label, a, b] of CONTRAST_PAIRS) {
   const ratio = contrast(a, b);
@@ -124,38 +132,49 @@ for (const [label, a, b] of CONTRAST_PAIRS) {
 }
 
 // ==========================================================================
-// 4) NO_NEW_V1_CONSUMERS (item 4) — nenhum arquivo NOVO desta fase importa
-//    lib/indicators.js ou lib/cashFlowProjection.js.
+// 4/5) NO_NEW_V1_CONSUMERS + ONE_TRUTH_ONE_NAME — Fase 6.0 (Design Freeze)
+// tocou praticamente toda `app/**` (retheme completo) — em vez de manter
+// uma lista fixa de arquivos (que fica stale a cada fase e não pega os
+// arquivos NOVOS de hoje: SpendableTodayCard/MoneyBridgeCard/Dados/etc),
+// varre TODO `app/**/*.jsx` + os `lib/*.js` de apresentação/navegação de
+// verdade. Mais forte que a versão anterior: garante o invariante pro app
+// inteiro, não só pro recorte de uma fase específica.
 // ==========================================================================
-const NEW_FILES_THIS_PHASE = [
-  "lib/navConfig.js",
-  "app/components/ui/Card.jsx",
-  "app/components/ui/Button.jsx",
-  "app/components/ui/Badge.jsx",
-  "app/components/ui/Input.jsx",
-  "app/components/ui/Select.jsx",
-  "app/components/ui/PageContainer.jsx",
-  "app/components/ui/index.js",
-  "app/components/MobileNav.jsx",
-  "app/components/NavBar.jsx",
-  "app/layout.js",
-  "app/login/page.js",
-  "app/components/Skeleton.jsx",
-];
-for (const relPath of NEW_FILES_THIS_PHASE) {
-  const content = fs.readFileSync(path.join(ROOT, relPath), "utf8");
-  const importsV1 = /lib\/indicators(\.js)?["']|lib\/cashFlowProjection(\.js)?["']/.test(content);
-  check(!importsV1, `NO_NEW_V1_CONSUMERS: ${relPath} não importa nenhuma lib V1`);
+function walk(dir, out = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) walk(full, out);
+    else if (/\.(jsx|js)$/.test(entry.name)) out.push(full);
+  }
 }
+const jsxFiles = [];
+walk(path.join(ROOT, "app"), jsxFiles);
+jsxFiles.push(path.join(ROOT, "lib/navConfig.js"), path.join(ROOT, "lib/homePresentation.js"));
 
-// ==========================================================================
-// 5) ONE TRUTH, ONE NAME — nenhum arquivo novo reintroduz vocabulário V1
-//    ("Caixa livre"/"Patrimônio disponível") como copy de unrestrictedCash.
-// ==========================================================================
-for (const relPath of NEW_FILES_THIS_PHASE) {
-  const content = fs.readFileSync(path.join(ROOT, relPath), "utf8");
-  check(!content.includes("Patrimônio disponível") && !content.includes("Caixa livre"), `ONE_TRUTH_ONE_NAME: ${relPath} não usa vocabulário V1`);
+const V1_IMPORT_RE = /lib\/(indicators|cashFlowProjection|intelligence|alerts)(\.js)?["']/;
+// Remove comentários antes de checar vocabulário — código legitimamente CITA
+// "Caixa livre"/"Patrimônio disponível" em comentários explicando por que NÃO
+// usar esses nomes (ver app/metas/page.js); só copy renderizada de verdade
+// importa aqui (mesmo critério de test-home-presentation.mjs).
+function stripComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 }
+let v1ImportViolations = 0;
+let v1VocabViolations = 0;
+for (const file of jsxFiles) {
+  const content = fs.readFileSync(file, "utf8");
+  const code = stripComments(content);
+  if (V1_IMPORT_RE.test(content)) {
+    v1ImportViolations++;
+    console.error(`   ↳ importa lib V1: ${path.relative(ROOT, file)}`);
+  }
+  if (code.includes("Patrimônio disponível") || code.includes("Caixa livre")) {
+    v1VocabViolations++;
+    console.error(`   ↳ usa vocabulário V1: ${path.relative(ROOT, file)}`);
+  }
+}
+check(v1ImportViolations === 0, `NO_NEW_V1_CONSUMERS: nenhum dos ${jsxFiles.length} arquivos de app/** importa lib V1`);
+check(v1VocabViolations === 0, `ONE_TRUTH_ONE_NAME: nenhum dos ${jsxFiles.length} arquivos de app/** usa vocabulário V1`);
 
 console.log(`\n${passed}/${passed + failed} teste(s) passaram.`);
 if (failed > 0) process.exit(1);
