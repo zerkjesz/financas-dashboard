@@ -80,13 +80,13 @@ export async function POST(request) {
     },
   });
 
-  // importBatchId NÃO é setado aqui — o campo é @unique e pertence à
-  // DataOperation de IMPORT_APPLY (usada pelo lookup de idempotência em
-  // apply/route.js); setá-lo também aqui faria o create() do apply colidir
-  // com este registro de preview (unique constraint), quebrando TODO apply
-  // real. Mesmo padrão já usado por undo.js (importBatchId: null).
+  // Fase 6.0.1 (Integrity Closure, item 4/5) — importBatchId NÃO é mais
+  // @unique (ImportBatch 1 → N DataOperation: PREVIEW, possivelmente FAILED,
+  // APPLY, talvez UNDO, e retries de qualquer um desses são eventos de
+  // auditoria genuínos e distintos do MESMO lote). Ligar o preview ao batch
+  // agora é seguro e completa o ciclo de vida auditável.
   await prisma.dataOperation
-    .create({ data: { type: "IMPORT_PREVIEW", status: "SUCCESS", mode, datasets, fileName: file.name, fileHash } })
+    .create({ data: { type: "IMPORT_PREVIEW", status: "SUCCESS", mode, datasets, fileName: file.name, fileHash, importBatchId: batch.id } })
     .catch((err) => console.error("[api/data/import/preview] falha ao registrar atividade:", err.message));
 
   const summary = mode === "replace" ? summarizeReplace(plan) : plan.summary;

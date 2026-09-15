@@ -698,11 +698,19 @@ model DataOperation {
   conflictCount Int                 @default(0)
   deletedCount  Int                 @default(0)
   errorMessage  String?
-  importBatchId String?             @unique
+  // Fase 6.0.1 (Integrity Closure) — NÃO é @unique. Um ImportBatch tem um
+  // ciclo de vida real (PREVIEW, possivelmente FAILED, APPLY, talvez UNDO, e
+  // retries de qualquer um desses) — são N eventos de auditoria genuínos pro
+  // MESMO lote, nunca um só. A relação é ImportBatch 1 → N DataOperation.
+  // Idempotência do apply NUNCA depende de conseguir gravar (ou ler de volta)
+  // um DataOperation específico — ver `ImportBatch.resultCounts` abaixo, que
+  // é a fonte de verdade pra resposta de "já aplicado".
+  importBatchId String?
   importBatch   ImportBatch?        @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
   createdAt     DateTime            @default(now())
 
   @@index([createdAt])
+  @@index([importBatchId])
 }
 
 // Um upload de importação, do preview até o apply (ou expiração/undo).
@@ -740,8 +748,14 @@ model ImportBatch {
   createdAt       DateTime          @default(now())
   expiresAt       DateTime
   undoDeadline    DateTime?
+  // Fase 6.0.1 (Integrity Closure) — contadores do resultado do apply,
+  // gravados NA MESMA transação que a mutação financeira e o status=APPLIED
+  // (lib/dataHub/apply.js). É a fonte de verdade pro retorno idempotente de
+  // um reapply (`alreadyApplied`) — nunca depende de reconsultar um
+  // DataOperation (que agora pode ter N linhas pro mesmo batch).
+  resultCounts    Json?
 
-  dataOperation   DataOperation?
+  dataOperations  DataOperation[]
 
   @@index([status, createdAt])
 }

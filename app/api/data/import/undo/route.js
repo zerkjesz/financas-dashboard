@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { undoImportBatch, UndoWindowExpiredError } from "@/lib/dataHub/undo";
+import { undoImportBatch, UndoWindowExpiredError, UndoStaleStateError } from "@/lib/dataHub/undo";
 
-// Fase 6.0 (Design Freeze) — DESFAZER uma importação aplicada, dentro da
-// janela de 24h. Autenticado + CSRF via middleware.js.
+// Fase 6.0 (Design Freeze) / 6.0.1 (Integrity Closure) — DESFAZER uma
+// importação aplicada, dentro da janela de 24h. Autenticado + CSRF via
+// middleware.js. As restaurações, o status=UNDONE e o DataOperation
+// IMPORT_UNDO agora são escritos em UMA ÚNICA transação dentro de
+// undoImportBatch (lib/dataHub/undo.js) — mesma exigência de atomicidade do
+// apply.
 export async function POST(request) {
   let body;
   try {
@@ -20,26 +24,15 @@ export async function POST(request) {
 
   try {
     const result = await undoImportBatch(prisma, batch);
-    await prisma.importBatch.update({ where: { id: batch.id }, data: { status: "UNDONE", undoneAt: new Date() } });
-    await prisma.dataOperation.create({
-      data: {
-        type: "IMPORT_UNDO",
-        status: "SUCCESS",
-        mode: batch.mode,
-        datasets: batch.datasets,
-        fileName: batch.fileName,
-        fileHash: batch.fileHash,
-        createdCount: result.restored,
-        deletedCount: result.deleted,
-        importBatchId: null, // o batch original já tem seu próprio DataOperation; este é um evento novo, solto.
-      },
-    });
     return NextResponse.json({ ok: true, ...result });
   } catch (err) {
     if (err instanceof UndoWindowExpiredError) {
       return NextResponse.json({ error: "undo_window_expired", message: err.message }, { status: 409 });
     }
-    console.error("[api/data/import/undo] falha ao desfazer:", err.message);
+    if (err instanceof UndoStaleStateError) {
+      return NextResponse.json({ error: "undo_stale_state", message: err.message, details: err.details }, { status: 409 });
+    }
+    console.error("[api/data/import/undo] falha ao desfazer (transação revertida):", err.message);
     return NextResponse.json({ error: "undo_failed", message: "Não foi possível desfazer — nada foi alterado (transação revertida)." }, { status: 500 });
   }
 }
