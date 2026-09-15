@@ -28,7 +28,30 @@ function check(name, cond, detail) {
   }
 }
 
-const created = { goals: [], incomes: [], expenses: [], transfers: [] };
+const created = { goals: [], incomes: [], expenses: [], transfers: [], importBatches: [] };
+
+// Fase 6.0.1 (Integrity Closure) — applyImportBatch/applyReplace agora
+// escrevem ImportBatch.status=APPLIED + DataOperation IMPORT_APPLY NA MESMA
+// transação da mutação financeira (lib/dataHub/apply.js), então precisam de
+// um ImportBatch REAL (não mais um objeto solto) — helper que replica
+// exatamente o que app/api/data/import/preview/route.js grava.
+async function makeBatch({ mode, datasets, rows, planFingerprint = [] }) {
+  const batch = await prisma.importBatch.create({
+    data: {
+      fileName: `${MARK}.xlsx`,
+      fileHash: `${MARK}-${Date.now()}-${Math.random()}`,
+      mode,
+      datasets,
+      rows,
+      plan: {},
+      planFingerprint,
+      status: "PENDING_APPLY",
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    },
+  });
+  created.importBatches.push(batch.id);
+  return batch;
+}
 
 async function cleanup() {
   console.log("\n--- cleanup ---");
@@ -36,6 +59,10 @@ async function cleanup() {
   for (const id of created.incomes) await prisma.income.delete({ where: { id } }).catch(() => {});
   for (const id of created.expenses) await prisma.expense.delete({ where: { id } }).catch(() => {});
   for (const id of created.transfers) await prisma.transfer.delete({ where: { id } }).catch(() => {});
+  // DataOperation referencia ImportBatch com onDelete:SetNull, mas apagamos
+  // explicitamente pra não deixar lixo de teste na Atividade de dados real.
+  await prisma.dataOperation.deleteMany({ where: { importBatchId: { in: created.importBatches } } }).catch(() => {});
+  for (const id of created.importBatches) await prisma.importBatch.delete({ where: { id } }).catch(() => {});
   // Qualquer coisa criada PELO PRÓPRIO import (e não rastreada acima) tem o
   // marcador no name/description — varredura final de segurança.
   const strayGoals = await prisma.goal.findMany({ where: { name: { contains: MARK } } });
@@ -64,7 +91,8 @@ async function main() {
   const plan1 = await planImport({ prisma, mode: "add", datasets: ["goals"], rowsBySheet: addRows });
   check("[B] plano ADICIONAR: 1 create, 0 skip (1ª vez)", plan1.perDataset.goals.creates.length === 1 && plan1.perDataset.goals.skips.length === 0);
 
-  const applied1 = await applyImportBatch(prisma, { mode: "add", datasets: ["goals"], rows: addRows, resolutions: {}, planFingerprint: [] });
+  const batch1 = await makeBatch({ mode: "add", datasets: ["goals"], rows: addRows });
+  const applied1 = await applyImportBatch(prisma, { id: batch1.id, mode: "add", datasets: ["goals"], rows: addRows, resolutions: {}, planFingerprint: [], fileName: batch1.fileName, fileHash: batch1.fileHash });
   check("[B] apply ADICIONAR cria 1 registro", applied1.counts.created === 1, JSON.stringify(applied1.counts));
   const newGoal = await prisma.goal.findFirst({ where: { name: goalName } });
   check("[B] goal realmente existe no banco", !!newGoal);
@@ -82,12 +110,15 @@ async function main() {
   const conflictKey = plan3.perDataset.goals.conflicts[0]?.conflictKey;
 
   // resolução "manter o atual" -> nada muda
-  const appliedKeep = await applyImportBatch(prisma, { mode: "update", datasets: ["goals"], rows: updateRows, resolutions: { [conflictKey]: "manter" }, planFingerprint: plan3.fingerprint });
+  const batchKeep = await makeBatch({ mode: "update", datasets: ["goals"], rows: updateRows, planFingerprint: plan3.fingerprint });
+  const appliedKeep = await applyImportBatch(prisma, { id: batchKeep.id, mode: "update", datasets: ["goals"], rows: updateRows, resolutions: { [conflictKey]: "manter" }, planFingerprint: plan3.fingerprint, fileName: batchKeep.fileName, fileHash: batchKeep.fileHash });
   const afterKeep = await prisma.goal.findUnique({ where: { id: newGoal.id } });
   check("[C] resolução 'manter' preserva o valor atual", Number(afterKeep.targetAmount) === 1000, String(afterKeep.targetAmount));
 
   // resolução "usar o do arquivo" -> aplica
-  const appliedUse = await applyImportBatch(prisma, { mode: "update", datasets: ["goals"], rows: updateRows, resolutions: { [conflictKey]: "usar" }, planFingerprint: plan3.fingerprint });
+  const plan3b = await planImport({ prisma, mode: "update", datasets: ["goals"], rowsBySheet: updateRows });
+  const batchUse = await makeBatch({ mode: "update", datasets: ["goals"], rows: updateRows, planFingerprint: plan3b.fingerprint });
+  const appliedUse = await applyImportBatch(prisma, { id: batchUse.id, mode: "update", datasets: ["goals"], rows: updateRows, resolutions: { [conflictKey]: "usar" }, planFingerprint: plan3b.fingerprint, fileName: batchUse.fileName, fileHash: batchUse.fileHash });
   const afterUse = await prisma.goal.findUnique({ where: { id: newGoal.id } });
   check("[C] resolução 'usar' aplica o valor do arquivo", Number(afterUse.targetAmount) === 2500, String(afterUse.targetAmount));
   check("[C] apply contou 1 updated", appliedUse.counts.updated === 1, JSON.stringify(appliedUse.counts));
@@ -106,33 +137,40 @@ async function main() {
   await prisma.goal.update({ where: { id: newGoal.id }, data: { notes: `${MARK} mudou por fora` } }); // simula edição concorrente
   const staleCheck = await fingerprintStillValid(prisma, planForStale.fingerprint);
   check("[E] fingerprint detecta mudança concorrente", staleCheck.valid === false, JSON.stringify(staleCheck));
+  const batchStale = await makeBatch({ mode: "update", datasets: ["goals"], rows: rowsById, planFingerprint: planForStale.fingerprint });
   let staleAborted = false;
   try {
-    await applyImportBatch(prisma, { mode: "update", datasets: ["goals"], rows: rowsById, resolutions: {}, planFingerprint: planForStale.fingerprint });
+    await applyImportBatch(prisma, { id: batchStale.id, mode: "update", datasets: ["goals"], rows: rowsById, resolutions: {}, planFingerprint: planForStale.fingerprint, fileName: batchStale.fileName, fileHash: batchStale.fileHash });
   } catch (err) {
     staleAborted = err instanceof StaleImportError;
   }
   check("[E] apply ABORTA (StaleImportError) quando o dado mudou", staleAborted);
+  const batchStaleAfter = await prisma.importBatch.findUnique({ where: { id: batchStale.id } });
+  check("[E] ImportBatch continua PENDING_APPLY após abort por staleness (zero efeito)", batchStaleAfter.status === "PENDING_APPLY", batchStaleAfter.status);
 
   // ============================================================
-  // 6) UNDO — desfaz o create da etapa 2 (via um apply fresco, isolado)
+  // 6) UNDO — ADD (desfaz o create da etapa 2, via um apply fresco isolado)
   // ============================================================
   const undoGoalName = `${MARK} Undo`;
   const undoRows = { goals: [{ name: undoGoalName, targetAmount: 500, savedAmount: 0 }] };
-  const appliedForUndo = await applyImportBatch(prisma, { mode: "add", datasets: ["goals"], rows: undoRows, resolutions: {}, planFingerprint: [] });
+  const batchForUndo = await makeBatch({ mode: "add", datasets: ["goals"], rows: undoRows });
+  const appliedForUndo = await applyImportBatch(prisma, { id: batchForUndo.id, mode: "add", datasets: ["goals"], rows: undoRows, resolutions: {}, planFingerprint: [], fileName: batchForUndo.fileName, fileHash: batchForUndo.fileHash });
   const goalForUndo = await prisma.goal.findFirst({ where: { name: undoGoalName } });
   check("[F] goal criada pra teste de undo existe", !!goalForUndo);
-  const fakeBatch = { preimages: appliedForUndo.preimages, undoDeadline: new Date(Date.now() + 60000) };
-  await undoImportBatch(prisma, fakeBatch);
+  const batchForUndoFresh = await prisma.importBatch.findUnique({ where: { id: batchForUndo.id } });
+  await undoImportBatch(prisma, batchForUndoFresh);
   const afterUndo = await prisma.goal.findUnique({ where: { id: goalForUndo.id } });
   check("[F] undo de um CREATE remove o registro", afterUndo === null);
 
   // ============================================================
-  // 7) SUBSTITUIR — escopo isolado (ano fictício 2099, zero dado real ali)
+  // 7) SUBSTITUIR — REAL (applyReplace de verdade: create+delete), escopo
+  //    isolado por range literal (ano fictício 2099, zero dado real ali).
+  //    Fase 6.0.1, item 10: já não simula mais via transação manual — chama
+  //    a função de produção de ponta a ponta.
   // ============================================================
-  const REPLACE_PERIOD_MARKER = "2099"; // fora de qualquer período real usado pelos outros testes/produto.
   const acct = await prisma.account.findFirst();
   check("[G] pré-condição: existe ao menos 1 conta real pra testar substituir", !!acct);
+  const range2099 = { gte: new Date("2099-01-01"), lt: new Date("2100-01-01") };
   if (acct) {
     // cria 2 incomes sintéticas em 2099 (fora de qualquer dado real)
     const synthetic = await Promise.all([
@@ -142,33 +180,32 @@ async function main() {
     synthetic.forEach((s) => created.incomes.push(s.id));
 
     const replaceRows = { incomes: [{ amount: 999, description: `${MARK} substituir NOVA`, accountName: acct.name, occurredAt: new Date("2099-01-15") }] };
-    // período "all" pegaria TUDO — em vez disso, filtramos manualmente o
-    // escopo aqui simulando um período custom via range direto no teste
-    // (planReplace usa periodRange(period), que não tem uma opção "ano
-    // específico" na UI — este teste valida o MOTOR, não a opção de UI).
-    const { periodRange } = await import("../lib/dataHub/sheets.js");
-    const range2099 = { gte: new Date("2099-01-01"), lt: new Date("2100-01-01") };
     const existing2099 = await prisma.income.findMany({ where: { occurredAt: range2099 }, select: { id: true } });
     check("[G] escopo 2099 contém exatamente as 2 incomes sintéticas", existing2099.length === 2, String(existing2099.length));
 
-    const replacePlan = await planReplace({ prisma, datasets: ["incomes"], period: "all", rowsBySheet: replaceRows });
-    // period:"all" no motor real deletaria tudo — pra manter o teste seguro
-    // contra o dataset de produção reconciliado, testamos deletableIds
-    // manualmente restritos ao escopo sintético em vez de rodar applyReplace
-    // com period "all" de verdade.
-    const onlySynthetic = replacePlan.perDataset.incomes.deletableIds.filter((id) => created.incomes.includes(id));
-    check("[G] plano de substituir identifica as sintéticas como deletáveis", onlySynthetic.length === 2, String(onlySynthetic.length));
+    const replacePlan = await planReplace({ prisma, datasets: ["incomes"], period: range2099, rowsBySheet: replaceRows });
+    check("[G] plano de substituir identifica exatamente as 2 sintéticas como deletáveis", replacePlan.perDataset.incomes.deletableIds.length === 2, String(replacePlan.perDataset.incomes.deletableIds.length));
+    check("[G] plano de substituir NÃO toca nada fora do escopo 2099 (0 protegidos, é esperado aqui)", replacePlan.perDataset.incomes.protectedIds.length === 0);
 
-    // aplica substituir SÓ no escopo sintético via transação manual (não
-    // chama applyReplace com period=all — isso apagaria a Renda real do
-    // usuário, o que este teste JAMAIS deve fazer).
-    await prisma.$transaction(async (tx) => {
-      await tx.income.deleteMany({ where: { id: { in: created.incomes } } });
-      const c = await tx.income.create({ data: { amount: 999, description: `${MARK} substituir NOVA`, accountId: acct.id, occurredAt: new Date("2099-01-15") } });
-      created.incomes = [c.id]; // só a nova sobrevive pra cleanup
-    });
+    const batchReplace = await makeBatch({ mode: "replace", datasets: ["incomes"], rows: replaceRows });
+    const appliedReplace = await applyReplace(prisma, { id: batchReplace.id, datasets: ["incomes"], period: range2099, rowsBySheet: replaceRows, fileName: batchReplace.fileName, fileHash: batchReplace.fileHash });
+    check("[G] applyReplace real: 2 deleted + 1 created", appliedReplace.counts.deleted === 2 && appliedReplace.counts.created === 1, JSON.stringify(appliedReplace.counts));
+
     const afterReplace = await prisma.income.findMany({ where: { occurredAt: range2099 } });
     check("[G] após substituir (escopo isolado): só a nova existe", afterReplace.length === 1 && afterReplace[0].amount.toNumber() === 999, JSON.stringify(afterReplace.map((r) => r.amount.toString())));
+    const newReplacedId = afterReplace[0]?.id;
+    created.incomes = newReplacedId ? [newReplacedId] : [];
+
+    const batchReplaceAfter = await prisma.importBatch.findUnique({ where: { id: batchReplace.id } });
+    check("[G] ImportBatch do replace ficou APPLIED com resultCounts gravado", batchReplaceAfter.status === "APPLIED" && !!batchReplaceAfter.resultCounts, batchReplaceAfter.status);
+
+    // ---- UNDO — SUBSTITUIR (item 10 da closure): restaura S0 exatamente ----
+    await undoImportBatch(prisma, batchReplaceAfter);
+    const afterUndoReplace = await prisma.income.findMany({ where: { occurredAt: range2099 } });
+    const amounts = afterUndoReplace.map((r) => r.amount.toNumber()).sort((a, b) => a - b);
+    check("[G] undo do substituir restaura S0 exatamente (as 2 originais, a nova removida)", amounts.length === 2 && amounts[0] === 111 && amounts[1] === 222, JSON.stringify(amounts));
+    check("[G] undo do substituir: nenhum duplicado, nenhum órfão", afterUndoReplace.every((r) => r.accountId === acct.id));
+    created.incomes = afterUndoReplace.map((r) => r.id); // as 2 restauradas, pro cleanup final
   }
 
   // ============================================================
