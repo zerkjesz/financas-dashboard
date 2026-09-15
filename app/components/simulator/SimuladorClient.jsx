@@ -173,16 +173,20 @@ export default function SimuladorClient() {
   return (
     <div>
       <header className="mb-6">
-        <h1 className="text-page-title text-text-primary">Simulador</h1>
+        <div className="text-eyebrow text-text-muted mb-1.5">Simulador</div>
+        <h1 className="text-page-title text-text-primary mb-1.5">Posso comprar isso?</h1>
         <p className="text-caption text-text-muted">
           Responde "e se…?" usando a mesma verdade financeira do resto do produto — <span className="text-text-secondary">simular nunca altera seus dados reais</span>.
         </p>
       </header>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 items-start">
-        <div className="space-y-4">
+      {/* Painel de entrada (max 360px, cresce até 300px de base) + painel de
+          resultado (cresce muito mais rápido, base 420px) — empilha em
+          coluna abaixo de lg, igual ao mock aprovado. */}
+      <div className="flex flex-col lg:flex-row gap-4 items-start">
+        <div className="w-full lg:max-w-[360px] lg:[flex:1_1_300px] space-y-4">
           <ScenarioSelector value={scenarioType} onChange={changeScenario} />
-          <div className="rounded-card bg-surface-1 p-6">
+          <div className="rounded-card bg-surface shadow-card p-6">
             <ScenarioForm
               scenarioType={scenarioType}
               form={form}
@@ -195,7 +199,7 @@ export default function SimuladorClient() {
             />
           </div>
           {error && (
-            <div role="alert" className="rounded-control bg-danger/10 p-3 text-sm text-text-primary">
+            <div role="alert" className="rounded-control bg-danger-bg p-3 text-sm text-danger-text">
               {error}
             </div>
           )}
@@ -213,7 +217,7 @@ export default function SimuladorClient() {
           )}
         </div>
 
-        <div>{result ? <ResultPanel result={result} /> : <EmptyResultState />}</div>
+        <div className="w-full lg:[flex:999_1_420px] min-w-0">{result ? <ResultPanel result={result} /> : <EmptyResultState />}</div>
       </div>
     </div>
   );

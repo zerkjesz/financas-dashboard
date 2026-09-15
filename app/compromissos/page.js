@@ -51,8 +51,9 @@ export default function CompromissosPage() {
   return (
     <PageContainer>
       <header className="mb-6">
-        <h1 className="text-page-title text-text-primary">Compromissos</h1>
-        <p className="text-caption text-text-muted">O que você precisa pagar, quando, e com qual grau de certeza</p>
+        <p className="text-eyebrow text-text-muted mb-1">Compromissos</p>
+        <h1 className="text-page-title text-text-primary mb-1">O que está pesando</h1>
+        <p className="text-body text-text-secondary">De cima para baixo: o que é certo, o que é do cartão e o que ainda pode não acontecer.</p>
       </header>
 
       <div className="space-y-4">
@@ -62,6 +63,12 @@ export default function CompromissosPage() {
           dueBeforeIncome={dueBeforeIncome}
           dueBeforeIncomeTotal={currentObligations.dueBeforeNextIncome}
         />
+
+        {/* 4º "group card" do design aprovado (confirmadas/cartão/parcelas
+            em CurrentHorizonSection + risco aqui) — mantido contíguo ao
+            grupo acima; o resto do conteúdo real (não coberto pelo mock)
+            vem depois. */}
+        <RiskSection contingency={contingency} />
 
         <NextIncomeWindowSection nextIncomeCommitment={nextIncomeCommitment} nextWindowItems={financial.externalInstallments.nextWindowItems} />
 
@@ -74,8 +81,6 @@ export default function CompromissosPage() {
         />
 
         <RunoffChart runoff={financial.externalInstallments.runoff} />
-
-        <RiskSection contingency={contingency} />
 
         <BillsManager bills={bills} accounts={accounts} onChanged={load} />
       </div>

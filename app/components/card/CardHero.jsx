@@ -3,105 +3,164 @@
 import Link from "next/link";
 import { Info, ArrowRight } from "lucide-react";
 import { formatMoney, formatDate } from "@/lib/formatMoney";
-import Badge from "../ui/Badge.jsx";
-import { CARD_BILL_STATUS_LABEL, CARD_BILL_STATUS_BADGE_VARIANT, detailGapLabel, creditUsageTone } from "@/lib/cardPresentation";
+import { detailGapLabel } from "@/lib/cardPresentation";
 
-// Fase 5.4D.1 — CARD_DESIGN_SIGNATURE, item 1/5: o hero ganha identidade
-// própria (anel de uso do limite, hairline restricted no topo) em vez de
-// ser "a Home hero sem wash/status" — mas nunca clona a composição da Home
-// (sem status/dominant-reason, sem breakdown). Hierarquia inalterada da
-// 5.4D: FATURA ATUAL (.text-metric-lg) > USO DO LIMITE > LIMITE DISPONÍVEL
-// (.text-metric-md, nunca headline — item 12). Crédito sempre `restricted`
-// (nunca positive verde), mesmo com limite disponível alto.
+// Fase 6.0 (Design Freeze) — RESTYLE + composição nova: o hero vira o
+// layout de 2 colunas do design aprovado (visual do cartão físico à
+// esquerda, fatura+limite empilhados à direita). Mesmos props de sempre
+// (`card`, `bill`) — nenhum dado novo buscado, só uma composição visual
+// que a página anterior não tinha (o "physical card visual" é inteiramente
+// decorativo, construído em cima de campos reais do cartão — nome, ciclo,
+// limite — nunca uma segunda fonte de dado).
+//
+// PAN mascarado — Norte não tem (e nunca teve) campo de número de cartão,
+// CVV ou validade no schema (ver prisma/schema.prisma, model Card): isso é
+// 100% decorativo, uma constante fixa, nunca calculado/derivado de nada
+// real. O mesmo vale pro nome "RICARDO CARDOSO" no verso do cartão — texto
+// de persona fixo, não um campo do banco de dados.
+const DECORATIVE_MASKED_PAN = "•••• •••• •••• 0000";
+
+function daysRemaining(dueAt) {
+  if (!dueAt) return null;
+  const due = new Date(dueAt);
+  const now = new Date();
+  // Diferença em dias de calendário (UTC, mesmo motivo do formatDate: datas
+  // de ciclo são meia-noite UTC — comparar em horário local desloca 1 dia
+  // em fusos negativos).
+  const diffMs = Date.UTC(due.getUTCFullYear(), due.getUTCMonth(), due.getUTCDate()) - Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round(diffMs / 86400000);
+}
+
 export default function CardHero({ card, bill }) {
   const usedPct = Number(card.totalLimit) > 0 ? Math.min(100, (Number(card.usedLimit) / Number(card.totalLimit)) * 100) : 0;
-  const tone = creditUsageTone(card.usedLimit, card.totalLimit);
   const gapNote = bill ? detailGapLabel(bill) : null;
-  const ringColor = tone === "danger" ? "var(--color-danger)" : "var(--color-restricted)";
+  const remaining = bill ? daysRemaining(bill.dueAt) : null;
 
   return (
-    <div className="relative overflow-hidden rounded-card bg-surface-2 p-6 sm:p-7">
-      {/* Hairline restricted — sinal mínimo de identidade do hero (item 1 da
-          assinatura), sem repetir a semântica de status da Home (aqui não
-          há "status financeiro", só um lembrete visual de que este cartão
-          trabalha com crédito). */}
-      <div className="absolute inset-x-0 top-0 h-[3px] bg-restricted/60" aria-hidden="true" />
+    <div className="grid grid-cols-1 lg:grid-cols-[0.95fr_1.3fr] gap-4">
+      {/* Visual do cartão físico — moldura escura + rosto do cartão. */}
+      <div className="rounded-card bg-ink p-5 sm:p-6">
+        <PhysicalCard card={card} />
 
-      <div className="text-label text-text-muted mb-1">Fatura atual</div>
-      {bill ? (
-        <>
-          <div className="flex flex-wrap items-end gap-3 mb-1.5">
-            <div className="text-metric-lg text-text-primary">{formatMoney(bill.totalAmount)}</div>
-            <Badge variant={CARD_BILL_STATUS_BADGE_VARIANT[bill.status] || "neutral"}>{CARD_BILL_STATUS_LABEL[bill.status] || bill.status}</Badge>
+        {bill && (
+          <div className="mt-5 grid grid-cols-3 border-t border-white/10 pt-4">
+            <Stat label="Fecha" value={bill.closesAt ? formatDate(bill.closesAt) : "—"} />
+            <Stat label="Vence" value={bill.dueAt ? formatDate(bill.dueAt) : "—"} border />
+            <Stat label="Faltam" value={remaining != null ? `${remaining} dia${Math.abs(remaining) === 1 ? "" : "s"}` : "—"} border />
           </div>
-          <div className="text-caption text-text-muted">
-            vence {formatDate(bill.dueAt)} · ciclo {bill.cycleMonth}
-          </div>
+        )}
+      </div>
 
-          {/* Item 13 — a nota de gap precisa parecer CONTEXTO DE QUALIDADE DE
-              DADO, nunca erro/warning: ícone Info neutro (não danger/warning),
-              hairline própria separando do resto da fatura, cor muted — a
-              mesma discrição de uma legenda, nunca um banner. */}
-          {gapNote && (
-            <div className="mt-3 flex items-start gap-1.5 border-t border-border-subtle pt-3">
-              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />
-              <p className="text-caption text-text-muted">
-                Total confirmado. {gapNote}.
-              </p>
-            </div>
+      {/* Fatura + limite, empilhados. */}
+      <div className="flex flex-col gap-4">
+        <div className="rounded-card bg-surface shadow-card p-5 sm:p-7">
+          <p className="text-eyebrow text-text-muted mb-2">O que já entrou nesta fatura</p>
+          {bill ? (
+            <>
+              <div className="tabular text-metric-lg text-text-primary">{formatMoney(bill.totalAmount)}</div>
+              <p className="text-caption text-text-muted mt-2">Ainda pode crescer até fechar, no dia {bill.closesAt ? formatDate(bill.closesAt) : "—"}.</p>
+
+              {/* Item 13 (herdado da 5.4D) — nota de gap é contexto de
+                  qualidade de dado, nunca erro/warning: ícone Info neutro. */}
+              {gapNote && (
+                <div className="mt-3 flex items-start gap-1.5 border-t border-border-subtle pt-3">
+                  <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />
+                  <p className="text-caption text-text-muted">Total confirmado. {gapNote}.</p>
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="text-body text-text-muted">Nenhuma fatura corrente para este cartão.</p>
           )}
-        </>
-      ) : (
-        <div className="text-body text-text-muted">Nenhuma fatura corrente para este cartão.</div>
-      )}
-
-      {/* Item 11 — anel substitui a barra linear fina: mesmo vocabulário
-          geométrico do anel de "Próxima renda" da Home (item 2 da
-          assinatura), mas cor/semântica diferentes (restricted = crédito,
-          nunca accent). Texto do % nunca escondido — número real ao lado do
-          anel, igual à Home (nunca clamp silencioso). */}
-      <div className="mt-6 flex items-center gap-4 border-t border-border-subtle pt-4">
-        <div
-          className="relative h-14 w-14 shrink-0 rounded-full"
-          style={{ background: `conic-gradient(${ringColor} ${Math.min(100, usedPct) * 3.6}deg, var(--color-surface-1) 0deg)` }}
-          role="img"
-          aria-label={`${usedPct.toFixed(0)}% do limite usado`}
-        >
-          <div className="absolute inset-[3px] flex items-center justify-center rounded-full bg-surface-2">
-            <span className={`tabular text-xs font-semibold ${tone === "danger" ? "text-danger" : "text-restricted"}`}>{usedPct.toFixed(0)}%</span>
-          </div>
         </div>
-        <div className="min-w-0">
-          <div className="text-label text-text-muted mb-1">Uso do limite</div>
-          <div className="tabular text-sm text-text-secondary">
-            {formatMoney(card.usedLimit)} de {formatMoney(card.totalLimit)}
+
+        <div className="rounded-card bg-surface shadow-card p-5 sm:p-7">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 mb-3">
+            <h2 className="text-card-title text-text-primary">Limite</h2>
+            <span className="tabular text-metric-md text-text-primary">
+              {formatMoney(card.usedLimit)} <span className="text-sm font-normal text-text-muted">de {formatMoney(card.totalLimit)}</span>
+            </span>
+          </div>
+
+          <div className="transition-bar h-3 w-full overflow-hidden rounded-pill bg-track">
+            <div className="transition-bar h-full rounded-pill bg-ink" style={{ width: `${usedPct}%` }} />
+          </div>
+
+          <p className="text-body text-text-secondary mt-3">Sobra de limite {formatMoney(card.availableLimit)}</p>
+          <p className="text-caption text-text-muted">é do banco, não seu</p>
+
+          {/* Entrada contextual pro Simulador — mesma rota/params de sempre,
+              nunca auto-executa (usuário aperta "Simular" de novo). */}
+          <div className="mt-4 border-t border-border-subtle pt-4">
+            <Link
+              href={`/simulador?scenario=card_single&cardId=${card.id}`}
+              className="focus-ring inline-flex items-center gap-1 rounded-control text-sm font-medium text-accent hover:text-accent-hover transition-colors pointer-coarse:min-h-11"
+            >
+              Simular uma compra neste cartão
+              <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+            </Link>
           </div>
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Limite disponível NUNCA é headline (item 12/17): escala .text-metric-md,
-          cor restricted (capacidade de dívida, não riqueza). */}
-      <div className="mt-4">
-        <div className="text-label text-text-muted mb-1">Limite disponível</div>
-        <div className="text-metric-md text-restricted">{formatMoney(card.availableLimit)}</div>
+function Stat({ label, value, border = false }) {
+  return (
+    <div className={`px-2 text-center ${border ? "border-l border-white/10" : ""}`}>
+      <div className="text-eyebrow text-white/50 mb-1">{label}</div>
+      <div className="tabular text-sm font-medium text-white">{value}</div>
+    </div>
+  );
+}
+
+function PhysicalCard({ card }) {
+  return (
+    <div
+      className="transition-press mx-auto flex rotate-[-1.2deg] flex-col justify-between rounded-[18px] p-4 shadow-card-orange hover:-translate-y-1 hover:rotate-0 sm:p-5"
+      style={{
+        aspectRatio: "1.586",
+        maxWidth: "330px",
+        background: "linear-gradient(135deg,var(--color-card-grad-1) 0%,var(--color-card-grad-2) 42%,var(--color-card-grad-3) 78%,var(--color-card-grad-4) 100%)",
+      }}
+    >
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-1.5">
+          {/* Marca Norte — decorativa, nunca branding de banco/bandeira
+              real (auditoria do ZIP confirma zero referência externa). */}
+          <span className="flex h-5 w-5 items-center justify-center rounded-[6px] bg-white" aria-hidden="true">
+            <span className="h-2 w-2 rotate-45" style={{ background: "var(--color-card-grad-2)" }} />
+          </span>
+          <span className="text-sm font-semibold text-white">Norte</span>
+        </div>
+        {/* Nome do cartão/conta real, nunca "PLATINUM"/tier de mock. */}
+        <span className="text-eyebrow text-white/80">{card.name}</span>
       </div>
 
-      {/* Fase 5.4E, item 13/45 — entrada contextual pro Simulador: só
-          roteia apresentação (scenario + cardId real), nunca auto-executa
-          (o Simulador sempre exige o usuário apertar "Simular" de novo —
-          ver SimuladorClient.jsx). Label descritiva e específica deste
-          cartão, nunca "Simular" genérico repetido pela tela inteira. */}
-      <div className="mt-4 border-t border-border-subtle pt-4">
-        {/* Fase 5.4E.1.1 — MEDIDO ao vivo: 20px real. pointer-coarse:min-h-11
-            só em touch, mesma disciplina do link equivalente em
-            FinancialHero.jsx. */}
-        <Link
-          href={`/simulador?scenario=card_single&cardId=${card.id}`}
-          className="focus-ring inline-flex items-center gap-1 rounded-control text-sm font-medium text-accent hover:text-accent-hover transition-colors pointer-coarse:min-h-11"
-        >
-          Simular uma compra neste cartão
-          <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
-        </Link>
+      {/* Chip EMV — decorativo. */}
+      <div
+        className="h-6 w-9 rounded-[4px]"
+        style={{ background: "linear-gradient(140deg,var(--color-card-chip-1),var(--color-card-chip-2) 55%,var(--color-card-chip-3))" }}
+        aria-hidden="true"
+      />
+
+      <div>
+        <div className="font-mono text-base tracking-[0.18em] text-white/90 sm:text-lg" aria-hidden="true">
+          {DECORATIVE_MASKED_PAN}
+        </div>
+        <div className="mt-3 flex items-end justify-between">
+          <div>
+            <div className="text-[9px] uppercase tracking-[0.14em] text-white/50">Titular</div>
+            {/* Texto de persona fixo/decorativo — Norte não tem campo de
+                nome de titular no cartão, isso nunca vem do banco de dados. */}
+            <div className="text-xs font-medium tracking-wide text-white/90">RICARDO CARDOSO</div>
+          </div>
+          <div className="text-right">
+            <div className="text-[9px] uppercase tracking-[0.14em] text-white/50">Validade</div>
+            <div className="font-mono text-xs font-medium text-white/90">00/00</div>
+          </div>
+        </div>
       </div>
     </div>
   );

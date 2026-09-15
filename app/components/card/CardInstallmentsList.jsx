@@ -1,37 +1,101 @@
 "use client";
 
+import { ShoppingBag, Layers } from "lucide-react";
 import { formatMoney } from "@/lib/formatMoney";
 
-// Fase 5.4D, item 18 — CARD installments (Purchase/Installment, sempre presa
-// a este Card) separadas de EXTERNAL installments (ExternalInstallmentPlan,
-// dívida fora do cartão — dono agora é /compromissos, item 19). Nunca
-// misturadas na mesma tabela só porque as duas têm "parcelas" no nome.
-export default function CardInstallmentsList({ purchases }) {
-  if (purchases.length === 0) return null;
+// Fase 6.0 (Design Freeze) — RESTYLE + composição nova: vira o "two-up" do
+// design aprovado — "Compras desta fatura" e "Parcelas rodando" lado a
+// lado, cada um com sua própria barra de progresso real. CARD installments
+// (Purchase/Installment, sempre presa a este Card) continuam separadas de
+// EXTERNAL installments (dono é /compromissos) — nenhuma mudança nessa
+// fronteira.
+//
+// "Compras desta fatura" é dado real, não uma segunda fonte: cada
+// `purchase.installments` já vem incluído por listPurchasesWithProgress
+// (GET /api/purchases, já buscado por page.js) — só filtramos, por compra,
+// a parcela cujo `billMonth` bate com o ciclo da fatura atual (`current.
+// cycleMonth`, já resolvido pelo engine em page.js). Nenhuma parcela nova é
+// calculada aqui.
+//
+// Judgment call / gap conhecido: esta lista só cobre compras PARCELADAS no
+// cartão (model Purchase). Uma despesa avulsa lançada direto no cartão
+// (model Expense, sem parcelamento) também entra no total oficial da
+// fatura (via computeExpectedCardBillTotal) mas não aparece aqui — Expense
+// não é buscado por esta página. Por isso o total desta lista pode ficar
+// abaixo do "O que já entrou nesta fatura" do hero; a nota de
+// hasDetailGap/gapNote no hero já sinaliza exatamente essa diferença.
+export default function CardInstallmentsList({ purchases, current }) {
+  const currentCycleMonth = current?.cycleMonth ?? null;
+
+  const currentBillItems = currentCycleMonth
+    ? purchases
+        .map((p) => {
+          const installment = (p.installments || []).find((i) => i.billMonth === currentCycleMonth);
+          return installment ? { purchase: p, installment } : null;
+        })
+        .filter(Boolean)
+    : [];
+
+  // Campo já calculado em listPurchasesWithProgress — nunca recomputado aqui.
+  const runningPurchases = purchases.filter((p) => p.remainingInstallments > 0);
+
+  if (currentBillItems.length === 0 && runningPurchases.length === 0) return null;
 
   return (
-    <div className="rounded-card bg-surface-1 p-6">
-      <h2 className="text-label text-text-muted mb-4">Compras parceladas no cartão</h2>
-      <div className="divide-y divide-border-subtle">
-        {purchases.map((p) => {
-          const pct = Math.min(100, (p.currentInstallmentNumber / p.installmentCount) * 100);
-          return (
-            <div key={p.id} className="py-3 first:pt-0 last:pb-0">
-              <div className="flex items-center justify-between gap-3 mb-1.5">
-                <span className="min-w-0 truncate text-sm text-text-secondary">{p.description}</span>
-                <span className="tabular shrink-0 text-sm font-medium text-text-primary">{formatMoney(p.installmentValue)}/mês</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="h-1.5 flex-1 overflow-hidden rounded-pill bg-surface-2">
-                  <div className="h-full rounded-pill bg-restricted" style={{ width: `${pct}%` }} />
-                </div>
-                <span className="tabular shrink-0 text-caption text-text-muted">
-                  {p.currentInstallmentNumber}/{p.installmentCount}
-                </span>
-              </div>
-            </div>
-          );
-        })}
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <ListCard icon={ShoppingBag} title="Compras desta fatura" items={currentBillItems} empty="Nenhuma parcela cai nesta fatura.">
+        {({ purchase, installment }) => (
+          <Row
+            key={purchase.id}
+            label={purchase.description}
+            sub={`parcela ${installment.number}/${purchase.installmentCount}`}
+            value={formatMoney(installment.amount)}
+            pct={Math.min(100, (installment.number / purchase.installmentCount) * 100)}
+          />
+        )}
+      </ListCard>
+
+      <ListCard icon={Layers} title="Parcelas rodando" items={runningPurchases} empty="Nenhuma parcela ativa neste cartão.">
+        {(p) => (
+          <Row
+            key={p.id}
+            label={p.description}
+            sub={`${p.currentInstallmentNumber}/${p.installmentCount} · ${formatMoney(p.installmentValue)}/mês`}
+            value={formatMoney(p.installmentValue)}
+            pct={Math.min(100, (p.currentInstallmentNumber / p.installmentCount) * 100)}
+          />
+        )}
+      </ListCard>
+    </div>
+  );
+}
+
+function ListCard({ icon: Icon, title, items, empty, children: renderItem }) {
+  return (
+    <div className="rounded-card bg-surface shadow-card p-5 sm:p-7">
+      <div className="mb-3 flex items-center gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-tile bg-chip-bg text-text-secondary">
+          <Icon className="h-4 w-4" aria-hidden="true" />
+        </div>
+        <h2 className="text-card-title text-text-primary">{title}</h2>
+      </div>
+      {items.length > 0 ? <div>{items.map(renderItem)}</div> : <p className="text-body text-text-muted py-2">{empty}</p>}
+    </div>
+  );
+}
+
+function Row({ label, sub, value, pct }) {
+  return (
+    <div className="-mx-2 rounded-control border-t border-border-subtle px-2 py-3 transition-colors hover:bg-chip-bg-2">
+      <div className="mb-1.5 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm text-text-secondary">{label}</div>
+          <div className="text-caption text-text-muted">{sub}</div>
+        </div>
+        <div className="tabular shrink-0 text-sm font-medium text-text-primary">{value}</div>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-pill bg-track">
+        <div className="transition-bar h-full rounded-pill bg-ink" style={{ width: `${pct}%` }} />
       </div>
     </div>
   );

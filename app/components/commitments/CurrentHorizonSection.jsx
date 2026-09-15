@@ -1,74 +1,99 @@
 "use client";
 
 import Link from "next/link";
+import { Receipt, CreditCard, Repeat } from "lucide-react";
 import { formatMoney, formatDate } from "@/lib/formatMoney";
 import { obligationItemLabel, obligationItemDate, obligationItemHref, OBLIGATION_CLASS_LABEL } from "@/lib/commitmentsPresentation";
 
-// Fase 5.4D.1 — CORRIGIDO: "Já gasto" e "Antes da próxima renda" viviam em
-// 2 cards `bg-surface-1` idênticos — nenhuma pista visual de que são,
-// juntos, o "horizonte atual" (o que REALMENTE reduz dinheiro livre hoje —
-// item 23/28 desta fase). Unificados num único bloco `surface-2` elevado
-// (mesmo grau da Home hero) com 2 subseções internas — a hierarquia
-// conceitual do próprio engine (INCURRED_LIABILITY + CURRENT_HORIZON_
-// OBLIGATION = o horizonte atual) agora tem uma hierarquia VISUAL
-// correspondente, em vez de 2 caixas soltas do mesmo peso.
-export default function CurrentHorizonSection({ incurred, incurredTotal, dueBeforeIncome, dueBeforeIncomeTotal }) {
-  if (incurred.length === 0 && dueBeforeIncome.length === 0) return null;
-  const combinedTotal = Number(incurredTotal) + Number(dueBeforeIncomeTotal);
+// Fase 6.0 (Design Freeze) — RESTYLE. A taxonomia de dado não muda: os
+// mesmos itens de `incurred`/`dueBeforeIncome` (já anotados com `.type` —
+// "CardBill" | "Bill" | "ConfirmedCommitment" | "ExternalInstallment" — em
+// lib/freeMoney.js, e `.class` — INCURRED_LIABILITY | CURRENT_HORIZON_
+// OBLIGATION — em lib/productFinancialSnapshot.js) continuam vindo prontos
+// do engine, nunca reclassificados aqui. O que muda é só a APRESENTAÇÃO:
+// em vez de 1 card único agrupado por TEMPO (já gasto / antes da renda),
+// os mesmos itens viram até 3 dos 4 "group cards" do design aprovado,
+// agrupados por TIPO (confirmadas / cartão / parcelas externas) — a MESMA
+// taxonomia que `item.type` já carrega. O total de cada grupo é só a soma
+// dos `amount` já computados por item (mesma operação que `combinedTotal`
+// já fazia antes, só em 3 fatias em vez de 1) — nenhum valor novo.
+const GRID_COLS = "grid-cols-[64px_minmax(0,1fr)_84px] sm:grid-cols-[96px_minmax(0,1fr)_140px]";
 
-  return (
-    <div className="rounded-card bg-surface-2 p-6 sm:p-7">
-      <div className="flex items-baseline justify-between gap-3 mb-1">
-        <h2 className="text-label text-text-muted">Horizonte atual</h2>
-        <span className="tabular text-metric-md text-text-primary">{formatMoney(combinedTotal)}</span>
-      </div>
-      <p className="text-caption text-text-muted mb-5">O que realmente reduz seu dinheiro livre agora — já aconteceu ou vence antes da próxima renda.</p>
-
-      {incurred.length > 0 && (
-        <Subsection title="Já gasto" total={incurredTotal} items={incurred} first />
-      )}
-      {dueBeforeIncome.length > 0 && (
-        <Subsection title="Antes da próxima renda" total={dueBeforeIncomeTotal} items={dueBeforeIncome} />
-      )}
-    </div>
-  );
+function sumAmounts(items) {
+  return items.reduce((s, i) => s + Number(i.amount), 0);
 }
 
-function Subsection({ title, total, items, first = false }) {
+function GroupCard({ icon: Icon, title, caption, total, items, dark = false }) {
+  if (items.length === 0) return null;
+  const rowHover = dark ? "hover:bg-white/5" : "hover:bg-chip-bg-2";
+  const border = dark ? "border-white/10" : "border-border-subtle";
+
   return (
-    <div className={first ? "" : "mt-5 border-t border-border-subtle pt-5"}>
-      <div className="flex items-baseline justify-between gap-3 mb-2">
-        <span className="text-caption font-medium text-text-secondary">{title}</span>
-        <span className="tabular text-sm font-medium text-text-primary">{formatMoney(total)}</span>
+    <div className={`rounded-card p-5 sm:p-7 ${dark ? "bg-ink text-white shadow-hero" : "bg-surface shadow-card"}`}>
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-2">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-tile ${dark ? "bg-accent/16 text-accent" : "bg-chip-bg text-text-secondary"}`}>
+            <Icon className="h-4 w-4" aria-hidden="true" />
+          </div>
+          <h2 className={`text-card-title truncate ${dark ? "text-white" : "text-text-primary"}`}>{title}</h2>
+        </div>
+        {caption && <span className={`text-eyebrow shrink-0 ${dark ? "text-white/50" : "text-text-muted"}`}>{caption}</span>}
+        <span className={`tabular ml-auto shrink-0 text-metric-md ${dark ? "text-white" : "text-text-primary"}`}>{formatMoney(total)}</span>
       </div>
-      <div className="divide-y divide-border-subtle">
+
+      <div className="mt-3">
         {items.map((item, i) => {
           const label = obligationItemLabel(item);
           const date = obligationItemDate(item);
           const href = obligationItemHref(item);
           const classLabel = item.class ? OBLIGATION_CLASS_LABEL[item.class] : null;
-          const content = (
-            <div className="flex items-center justify-between gap-3 py-2 text-sm">
-              <div className="min-w-0">
-                <div className="text-text-secondary truncate">{label}</div>
-                {date && (
-                  <div className="text-caption text-text-muted">
-                    {classLabel ? `${classLabel} · ` : ""}até {formatDate(date)}
-                  </div>
-                )}
-              </div>
-              <div className="tabular shrink-0 font-medium text-text-primary">{formatMoney(item.amount)}</div>
+          const rowContent = (
+            <div className={`focus-ring grid ${GRID_COLS} items-center gap-2 rounded-control border-t ${border} py-3 -mx-2 px-2 transition-colors ${rowHover}`}>
+              <span className={`tabular text-xs ${dark ? "text-white/50" : "text-text-muted"}`}>{date ? formatDate(date) : "—"}</span>
+              <span className="min-w-0">
+                <span className={`block truncate text-sm ${dark ? "text-white/90" : "text-text-secondary"}`}>{label}</span>
+                {classLabel && <span className={`block text-caption ${dark ? "text-white/40" : "text-text-muted"}`}>{classLabel}</span>}
+              </span>
+              <span className={`tabular text-right text-sm font-medium ${dark ? "text-white" : "text-text-primary"}`}>{formatMoney(item.amount)}</span>
             </div>
           );
           return href ? (
-            <Link key={i} href={href} className="focus-ring -mx-2 block rounded-control px-2 transition-colors hover:bg-surface-1/60">
-              {content}
+            <Link key={item.id ?? i} href={href} className="block">
+              {rowContent}
             </Link>
           ) : (
-            <div key={i}>{content}</div>
+            <div key={item.id ?? i}>{rowContent}</div>
           );
         })}
       </div>
     </div>
+  );
+}
+
+export default function CurrentHorizonSection({ incurred, incurredTotal, dueBeforeIncome, dueBeforeIncomeTotal }) {
+  if (incurred.length === 0 && dueBeforeIncome.length === 0) return null;
+
+  // Mesmo array combinado que o card único antigo somava em `combinedTotal`
+  // (incurredTotal + dueBeforeIncomeTotal) — só reparticionado por tipo em
+  // vez de mostrado como 1 bloco.
+  const all = [...incurred, ...dueBeforeIncome];
+  const confirmedItems = all.filter((i) => i.type !== "CardBill" && i.type !== "ExternalInstallment");
+  const cardItems = all.filter((i) => i.type === "CardBill");
+  const externalItems = all.filter((i) => i.type === "ExternalInstallment");
+
+  // Caption do grupo "Fatura de cartão" — data de vencimento real (mais
+  // próxima, quando há mais de um cartão) do próprio item, nunca inventada.
+  const cardDueDates = cardItems.map((i) => obligationItemDate(i)).filter(Boolean).sort();
+  const cardCaption = cardDueDates.length > 0 ? `vence ${formatDate(cardDueDates[0])}` : null;
+
+  const externalCaption =
+    externalItems.length > 0 ? `${externalItems.length} parcela${externalItems.length > 1 ? "s" : ""} neste horizonte` : null;
+
+  return (
+    <>
+      <GroupCard icon={Receipt} title="Contas confirmadas" caption="não dá para adiar" total={sumAmounts(confirmedItems)} items={confirmedItems} />
+      <GroupCard icon={CreditCard} title="Fatura de cartão" caption={cardCaption} total={sumAmounts(cardItems)} items={cardItems} dark />
+      <GroupCard icon={Repeat} title="Parcelas externas" caption={externalCaption} total={sumAmounts(externalItems)} items={externalItems} />
+    </>
   );
 }

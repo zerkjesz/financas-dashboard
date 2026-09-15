@@ -1,50 +1,53 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Plus } from "lucide-react";
 import AddForm from "./AddForm.jsx";
 import PageContainer from "./ui/PageContainer.jsx";
 import Button from "./ui/Button.jsx";
 import { DashboardSkeleton } from "./Skeleton.jsx";
-import FinancialHero from "./dashboard/FinancialHero.jsx";
-import NextIncomeCard from "./dashboard/NextIncomeCard.jsx";
+import SpendableTodayCard from "./dashboard/SpendableTodayCard.jsx";
+import MoneyBridgeCard from "./dashboard/MoneyBridgeCard.jsx";
+import NotSpendableStrip from "./dashboard/NotSpendableStrip.jsx";
+import WeightedPressuresCard from "./dashboard/WeightedPressuresCard.jsx";
+import NextIncomeSpotlight from "./dashboard/NextIncomeSpotlight.jsx";
+import UpcomingEventsCard from "./dashboard/UpcomingEventsCard.jsx";
 import RiskSurface from "./dashboard/RiskSurface.jsx";
-import PhysicalMoneyContext from "./dashboard/PhysicalMoneyContext.jsx";
-import SpendingSection from "./dashboard/SpendingSection.jsx";
-import ProjectionSummary from "./dashboard/ProjectionSummary.jsx";
-import { selectCriticalBannerReason } from "@/lib/homePresentation";
+import { selectCriticalBannerReason, STATUS_COPY } from "@/lib/homePresentation";
+
+const GREETING_BY_HOUR = (hour) => (hour < 12 ? "Bom dia" : hour < 18 ? "Boa tarde" : "Boa noite");
+// Data de HOJE (não uma data de calendário armazenada em UTC-meia-noite) —
+// nunca reaproveitar formatMoney.formatDate aqui (aquele força timeZone:UTC,
+// certo pra vencimento/fechamento persistidos, errado pra "agora" no fuso
+// local de verdade).
+const formatToday = (date) => {
+  const s = date.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
+  return s.charAt(0).toUpperCase() + s.slice(1);
+};
+const STATUS_DOT_CLASS = { TRANQUILO: "bg-positive", ATENCAO: "bg-warning", APERTADO: "bg-warning", CRITICO: "bg-danger" };
 
 // ============================================================================
-// Fase 5.4C — HOME REDESIGN / DECISION-FIRST DASHBOARD.
+// Fase 6.0 (Design Freeze) — HOME reconstruída sobre a identidade final do
+// ZIP aprovado, MESMA hierarquia de decisão já em vigor desde a 5.4C (nunca
+// reordenada, só re-vestida):
 //
-// A Home deixa de ser "todos os componentes do produto empilhados" e passa a
-// responder, nesta ordem — a MESMA ordem tanto no DOM quanto visualmente em
-// qualquer viewport (item 44: nunca usar CSS `order` pra criar uma leitura
-// visual diferente da leitura por teclado/screen reader):
+//   1. Como eu tô / quanto dá pra gastar hoje -> SpendableTodayCard + bridge
+//   2. Isso não é dinheiro livre (VA/limite)   -> NotSpendableStrip
+//   3. O que mais pesa                          -> WeightedPressuresCard
+//   4. A próxima renda alivia                   -> NextIncomeSpotlight
+//   5. Existe risco em aberto?                  -> RiskSurface (condicional)
+//   6. Chega e sai nos próximos dias             -> UpcomingEventsCard
 //
-//   1. Como eu tô?            -> FinancialHero (status + freeMoney + safeToSpend + motivo)
-//   2. O que vem a seguir?    -> NextIncomeCard
-//   3. Onde estão os números físicos? -> PhysicalMoneyContext
-//   4. Existe risco em aberto? -> RiskSurface (só quando há contingência ativa)
-//   5. Pra onde foi o dinheiro? -> SpendingSection
-//   6. Como fico? (30/60/90)  -> ProjectionSummary
-//
-// Removidos da Home na Fase 5.4C (LEGACY_HOME_CALLER_REMOVED — arquivos só
-// deixaram de ser renderizados) e DELETADOS na Fase 5.4F após confirmação
-// de zero-caller real (grep completo, nenhum import fora do próprio arquivo
-// de definição — ver DEAD_COMPONENT_AUDIT do relatório da fase): AlertsPanel,
-// BalanceCards, CardsSection, ValeAlimentacaoCard, UpcomingObligations,
-// IntelligenceSummary, CategoryBreakdown/TopExpenses antigos (substituídos
-// por SpendingSection), TransactionsTable completa (70+ linhas — Histórico
-// tem os próprios componentes agora, história/*.jsx).
-//
-// Nenhum cálculo financeiro novo: todo número vem de `data.financial`
-// (lib/productFinancialSnapshot.js) ou de `data.cards`/`cycleEntries`
-// (já filtrados no próprio parent desde a Fase 5.3B).
+// Nenhum cálculo financeiro novo: todo número continua vindo de
+// `data.financial` (lib/productFinancialSnapshot.js) ou de
+// `data.cards`/`data.upcomingObligations`/`cycleEntries` (já corretos desde
+// a 5.3B/5.4C).
 // ============================================================================
 export default function Dashboard() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [now] = useState(() => new Date());
 
   async function load() {
     setLoading(true);
@@ -62,38 +65,39 @@ export default function Dashboard() {
     return <DashboardSkeleton />;
   }
 
-  // Fase 5.3B, item 22/23 — "gastos do ciclo" significam o CICLO FINANCEIRO
-  // pessoal (24→23 por padrão), não mês calendário nem todo o histórico.
-  // TOP_EXPENSES_PERIOD_STATUS = ALREADY_FIXED_AT_PARENT (auditado na Fase
-  // 5.4B): este filtro já existia desde a Fase 5.3B — SpendingSection não
-  // reimplementa nada, só recebe `cycleEntries` pronto.
   const cycleStart = data.financialCycle ? new Date(data.financialCycle.start) : null;
   const cycleEntries = cycleStart ? data.entries.filter((e) => new Date(e.occurredAt) >= cycleStart) : data.entries;
 
   const { financial } = data;
   const criticalReason = financial.liquidity.status === "CRITICO" ? selectCriticalBannerReason(financial.liquidity.statusReasons) : null;
   const hasRisk = financial.contingency?.items?.length > 0;
+  const statusCopy = STATUS_COPY[financial.liquidity.status] ?? STATUS_COPY.ATENCAO;
+  const daysToIncome = financial.nextIncome?.expectedDate
+    ? Math.max(0, Math.round((new Date(financial.nextIncome.expectedDate).setUTCHours(0, 0, 0, 0) - now.setHours(0, 0, 0, 0)) / 86400000))
+    : null;
 
   return (
     <PageContainer>
-      {/* Item 5 — greeting sem timestamp fake. "Visão atual" é honesto (o
-          dado É o estado atual do fetch); nunca "atualizado há 2 min" sem
-          rastrear isso de verdade. */}
-      <header className="flex flex-wrap items-center justify-between gap-3 mb-6">
+      <header className="flex flex-wrap items-start justify-between gap-4 mb-7">
         <div>
-          <h1 className="text-page-title text-text-primary">Olá</h1>
-          <p className="text-caption text-text-muted">Visão atual dos seus números</p>
+          <div className="text-eyebrow text-text-muted mb-1">{formatToday(now)}</div>
+          <h1 className="text-page-title text-text-primary">{GREETING_BY_HOUR(now.getHours())}.</h1>
         </div>
-        <Button onClick={() => setShowAddForm((v) => !v)} variant="secondary">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-          </svg>
-          Adicionar lançamento
-        </Button>
+        <div className="flex items-center gap-3">
+          <div className="hidden sm:flex items-center gap-2 rounded-pill bg-surface px-4 py-2 shadow-card">
+            <span className={`h-2 w-2 rounded-full ${STATUS_DOT_CLASS[financial.liquidity.status] ?? "bg-warning"}`} aria-hidden="true" />
+            <span className="text-sm font-semibold text-text-primary">{statusCopy.label}</span>
+            {daysToIncome != null && <span className="text-caption text-text-muted">faltam {daysToIncome} dias para a renda</span>}
+          </div>
+          <Button onClick={() => setShowAddForm((v) => !v)} variant="secondary">
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            Adicionar lançamento
+          </Button>
+        </div>
       </header>
 
       {showAddForm && (
-        <div className="mb-6">
+        <div className="mb-7">
           <AddForm
             accounts={data.accounts}
             cards={data.cards}
@@ -106,41 +110,33 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Item 24 — consolidação de banners: TRANQUILO/ATENÇÃO/APERTADO nunca
-          têm banner de status (Apertado já tem o CTA discreto dentro do
-          hero). CRÍTICO é o ÚNICO status com banner permitido — e só com o
-          motivo estruturado REAL (lib/financialStatus.js), nunca uma frase
-          inventada aqui nem duplicando o que o hero já diz. */}
       {criticalReason && (
-        <div role="alert" className="mb-6 rounded-card bg-danger/10 px-4 py-3 text-sm text-text-primary">
+        <div role="alert" className="mb-7 rounded-card bg-danger-bg px-4 py-3 text-sm text-danger-text">
           {criticalReason.message}
         </div>
       )}
 
-      {/* 1. Como eu tô? + 2. O que vem a seguir? (lado a lado no desktop, sem
-          reordenar o DOM em mobile — só o grid muda de 1 pra 2 colunas).
-          Fase 5.4C.1, item 39 — ritmo vertical variado: gap-4 (16px) DENTRO
-          de uma linha de cards relacionados, mb-8 (32px) ENTRE clusters de
-          assunto diferente (decisão -> contexto -> exploração) — nunca o
-          mesmo espaçamento uniforme em tudo (achado da 5.4C.1). */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8 items-start">
-        <div className="lg:col-span-2">
-          <FinancialHero financial={financial} />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6 items-stretch">
+        <SpendableTodayCard financial={financial} />
+        <MoneyBridgeCard financial={financial} />
+      </div>
+
+      <div className="mb-6">
+        <NotSpendableStrip restricted={financial.restricted} cards={data.cards} />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] gap-4 mb-6 items-start">
+        <WeightedPressuresCard entries={cycleEntries} />
+        <NextIncomeSpotlight nextIncome={financial.nextIncome} nextIncomeCommitment={financial.nextIncomeCommitment} />
+      </div>
+
+      {hasRisk && (
+        <div className="mb-6">
+          <RiskSurface contingency={financial.contingency} />
         </div>
-        <NextIncomeCard nextIncome={financial.nextIncome} nextIncomeCommitment={financial.nextIncomeCommitment} />
-      </div>
+      )}
 
-      {/* 3. Onde estão os números físicos? + 4. Existe risco em aberto? */}
-      <div className="space-y-4 mb-8">
-        <PhysicalMoneyContext liquidity={financial.liquidity} cards={data.cards} restricted={financial.restricted} />
-        {hasRisk && <RiskSurface contingency={financial.contingency} />}
-      </div>
-
-      {/* 5. Pra onde foi o dinheiro? + 6. Como fico? */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-        <SpendingSection entries={cycleEntries} />
-        <ProjectionSummary projectionSummary={financial.projectionSummary} />
-      </div>
+      <UpcomingEventsCard items={data.upcomingObligations} />
     </PageContainer>
   );
 }

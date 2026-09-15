@@ -3,13 +3,14 @@
 import { formatMoney } from "@/lib/formatMoney";
 import { obligationItemLabel } from "@/lib/commitmentsPresentation";
 
-// Fase 5.4D, item 29 — "Sai da próxima renda" NUNCA soma manualmente em JSX
-// (item 29, explícito): `committedAmount` já é o total canônico
-// (getNextIncomeCommitment); cardAmount/externalAmount/otherAmount são a
-// DECOMPOSIÇÃO desse MESMO total (productFinancialSnapshot.js já reconcilia
-// via otherAmount — nunca uma soma alternativa daqui). Mostrar essa
-// decomposição não é um segundo compromisso (item 27, double-count safety)
-// — é o MESMO número de "Já comprometido" da Home, só aberto em 3 partes.
+// Fase 6.0 (Design Freeze) — RESTYLE. Não é um dos 4 "group cards" do
+// design aprovado (esse cobre confirmadas/cartão/parcelas/risco) — é
+// conteúdo real que a referência não mostra mas que já existia e continua
+// funcional, só migrado pro vocabulário visual novo (eyebrow mono, card
+// branco, tabular-nums). Nenhuma soma nova em JSX (item 29 original):
+// `committedAmount` continua o total canônico; cardAmount/externalAmount/
+// otherAmount continuam a MESMA decomposição pronta de
+// lib/productFinancialSnapshot.js.
 export default function NextIncomeWindowSection({ nextIncomeCommitment, nextWindowItems }) {
   const { committedAmount, baseCommittedPercent, cardAmount, externalAmount, otherAmount } = nextIncomeCommitment;
   if (Number(committedAmount) === 0) return null;
@@ -21,10 +22,10 @@ export default function NextIncomeWindowSection({ nextIncomeCommitment, nextWind
   ].filter((p) => Number(p.amount) > 0);
 
   return (
-    <div className="rounded-card bg-surface-1 p-6">
+    <div className="rounded-card bg-surface p-5 sm:p-7 shadow-card">
       <div className="flex items-baseline justify-between gap-3 mb-1">
-        <h2 className="text-label text-text-muted">Sai da próxima renda</h2>
-        <span className="tabular text-sm font-medium text-text-primary">{formatMoney(committedAmount)}</span>
+        <h2 className="text-eyebrow text-text-muted">Sai da próxima renda</h2>
+        <span className="tabular text-metric-md text-text-primary">{formatMoney(committedAmount)}</span>
       </div>
       <p className="text-caption text-text-muted mb-4">
         {baseCommittedPercent.toFixed(0)}% do valor-base da próxima renda já tem destino antes mesmo de cair.

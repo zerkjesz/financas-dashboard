@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Trash2 } from "lucide-react";
+import { Trash2, Plus } from "lucide-react";
 import { formatMoney, formatDate } from "@/lib/formatMoney";
 import { CATEGORIES } from "@/lib/categoryRules";
 import { BILL_STATUS_LABEL, BILL_STATUS_BADGE_VARIANT } from "@/lib/commitmentsPresentation";
@@ -46,11 +46,12 @@ export default function BillsManager({ bills, accounts, onChanged }) {
   const filtered = statusFilter === "all" ? bills : bills.filter((b) => b.status === statusFilter);
 
   return (
-    <div className="rounded-card bg-surface-1 p-6">
+    <div className="rounded-card bg-surface p-5 sm:p-7 shadow-card">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <h2 className="text-label text-text-muted">Gerenciar contas avulsas</h2>
+        <h2 className="text-eyebrow text-text-muted">Gerenciar contas avulsas</h2>
         <Button variant="secondary" onClick={() => setShowForm((v) => !v)}>
-          + Nova conta
+          <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+          Nova conta
         </Button>
       </div>
 
@@ -79,7 +80,7 @@ export default function BillsManager({ bills, accounts, onChanged }) {
       ) : (
         <div className="divide-y divide-border-subtle">
           {filtered.map((bill) => (
-            <div key={bill.id} className="py-3 first:pt-0 last:pb-0">
+            <div key={bill.id} className="rounded-control -mx-2 px-2 py-3 transition-colors hover:bg-chip-bg-2">
               <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
                 <div className="min-w-0">
                   <div className="text-sm text-text-secondary truncate">{bill.description}</div>
@@ -95,15 +96,15 @@ export default function BillsManager({ bills, accounts, onChanged }) {
               <div className="flex items-center gap-3">
                 {(bill.status === "pending" || bill.status === "overdue") && (
                   <>
-                    <button onClick={() => setPayingId(payingId === bill.id ? null : bill.id)} className="focus-ring rounded-control text-xs font-medium text-positive hover:text-positive-soft cursor-pointer">
+                    <button onClick={() => setPayingId(payingId === bill.id ? null : bill.id)} className="focus-ring inline-flex items-center rounded-control text-xs font-medium text-positive hover:text-positive/80 cursor-pointer pointer-coarse:min-h-11">
                       pagar
                     </button>
-                    <button onClick={() => cancelBill(bill.id)} className="focus-ring rounded-control text-xs text-text-muted hover:text-text-primary cursor-pointer">
+                    <button onClick={() => cancelBill(bill.id)} className="focus-ring inline-flex items-center rounded-control text-xs text-text-muted hover:text-text-primary cursor-pointer pointer-coarse:min-h-11">
                       cancelar
                     </button>
                   </>
                 )}
-                <button onClick={() => deleteBill(bill.id)} className="focus-ring ml-auto rounded-control text-text-muted hover:text-danger cursor-pointer" title="Excluir" aria-label="Excluir">
+                <button onClick={() => deleteBill(bill.id)} className="focus-ring ml-auto inline-flex items-center justify-center rounded-control text-text-muted hover:text-danger-text cursor-pointer pointer-coarse:min-h-11 pointer-coarse:min-w-11" title="Excluir" aria-label="Excluir">
                   <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
               </div>

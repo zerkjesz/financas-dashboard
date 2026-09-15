@@ -8,12 +8,13 @@ const CHECKPOINTS = [
   { key: "day90", label: "90 dias" },
 ];
 
-// Fase 5.4D, item 38 — usuário precisa entender BASE ≠ garantia, EXPECTED/
-// STRESS ≠ fatos, com copy humana (nunca enum cru). Se os 3 cenários
-// baterem exatamente pros checkpoints presentes (caso real de hoje: o único
-// risco em aberto não tem data prevista, então não desloca a trajetória
-// datada — ver RiskCallout), mostra só BASE + uma nota honesta em vez de 3
-// linhas idênticas fingindo 3 informações diferentes.
+// Fase 6.0 (Design Freeze) — restyle pra "compact summary strip" (posição:
+// acima da lista de eventos, dentro do fluxo da página) — mesmo dado real
+// de sempre (checkpoints.base/expected/stress), só reapresentado como uma
+// faixa curta em vez do card cheio que era antes. BASE ≠ garantia,
+// EXPECTED/STRESS ≠ fatos continuam distintos: quando os 3 cenários batem
+// pros checkpoints disponíveis, mostra só BASE + uma nota; quando divergem
+// (o caso real de haver risco em aberto com data), mostra os 3 números.
 export default function FlowCheckpoints({ checkpoints, horizonDays }) {
   const available = CHECKPOINTS.filter((c) => checkpoints.base[c.key] != null && dayFits(c.key, horizonDays));
   if (available.length === 0) return null;
@@ -26,13 +27,12 @@ export default function FlowCheckpoints({ checkpoints, horizonDays }) {
   });
 
   return (
-    <div className="rounded-card bg-surface-1 p-6">
-      <h2 className="text-label text-text-muted mb-4">Como fico (base)</h2>
+    <div className="rounded-card bg-surface shadow-card p-5 sm:p-6">
       <div className="flex flex-col divide-y divide-border-subtle sm:flex-row sm:items-center sm:divide-x sm:divide-y-0">
         {available.map(({ key, label }) => (
           <div key={key} className="py-3 first:pt-0 last:pb-0 sm:flex-1 sm:px-4 sm:py-0 sm:first:pl-0 sm:last:pr-0">
-            <div className="text-caption text-text-muted mb-1">{label}</div>
-            <div className={`tabular text-base font-semibold ${Number(checkpoints.base[key].projectedCash) < 0 ? "text-danger" : "text-text-primary"}`}>
+            <div className="text-caption text-text-muted mb-1">Saldo em {label} (base)</div>
+            <div className={`tabular text-base font-semibold ${Number(checkpoints.base[key].projectedCash) < 0 ? "text-danger-text" : "text-text-primary"}`}>
               {formatMoney(checkpoints.base[key].projectedCash)}
             </div>
           </div>
@@ -40,7 +40,7 @@ export default function FlowCheckpoints({ checkpoints, horizonDays }) {
       </div>
 
       {scenariosDiffer ? (
-        <div className="mt-4 border-t border-border-subtle pt-3 space-y-2">
+        <div className="mt-3 border-t border-border-subtle pt-3 space-y-1.5">
           <p className="text-caption text-text-muted">Cenário esperado e cenário de pressão (com o risco em aberto aplicado):</p>
           {available.map(({ key, label }) => (
             <div key={key} className="flex items-center justify-between text-caption text-text-muted">
@@ -53,7 +53,7 @@ export default function FlowCheckpoints({ checkpoints, horizonDays }) {
         </div>
       ) : (
         <p className="text-caption text-text-muted mt-3 border-t border-border-subtle pt-3">
-          Cenário esperado e de pressão batem com a base — o único risco em aberto ainda não tem data prevista, então não desloca esta trajetória (ver Riscos abaixo).
+          Cenário esperado e de pressão batem com a base — nenhum risco em aberto com data prevista desloca esta trajetória.
         </p>
       )}
     </div>

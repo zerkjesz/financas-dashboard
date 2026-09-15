@@ -4,19 +4,18 @@ import Link from "next/link";
 import { formatMoney, formatDate } from "@/lib/formatMoney";
 import { obligationItemLabel, obligationItemDate, obligationItemHref, OBLIGATION_CLASS_LABEL } from "@/lib/commitmentsPresentation";
 
-// Fase 5.4D, itens 26/28/30 — bucket genérico reaproveitado pelas 4 seções
-// de horizonte (Já gasto / Antes da próxima renda / Mais pra frente). "Sai
-// da próxima renda" usa NextIncomeWindowSection (formato de decomposição
-// diferente — cardAmount/externalAmount/otherAmount — não uma lista de
-// items soltos). `muted` (item 30) reduz peso visual pra Mais pra frente —
-// conhecimento, não urgência.
-export default function ObligationBucket({ title, subtitle, items, total, emptyLabel, muted = false }) {
+// Fase 6.0 (Design Freeze) — RESTYLE. Bucket genérico reaproveitado por
+// "Mais pra frente" (item 26/28/30 original) — conteúdo real que a
+// referência não desenha explicitamente, mantido e migrado pro vocabulário
+// visual novo. `muted` (item 30 original) continua reduzindo peso visual
+// (bg-surface-2 em vez de bg-surface) — conhecimento, não urgência.
+export default function ObligationBucket({ title, subtitle, items, total, muted = false }) {
   if (items.length === 0) return null;
 
   return (
-    <div className={`rounded-card p-6 ${muted ? "bg-surface-1/60" : "bg-surface-1"}`}>
+    <div className={`rounded-card p-5 sm:p-7 ${muted ? "bg-surface-2" : "bg-surface shadow-card"}`}>
       <div className="flex items-baseline justify-between gap-3 mb-1">
-        <h2 className="text-label text-text-muted">{title}</h2>
+        <h2 className="text-eyebrow text-text-muted">{title}</h2>
         {total != null && <span className={`tabular text-sm font-medium ${muted ? "text-text-secondary" : "text-text-primary"}`}>{formatMoney(total)}</span>}
       </div>
       {subtitle && <p className="text-caption text-text-muted mb-3">{subtitle}</p>}
@@ -43,7 +42,7 @@ export default function ObligationBucket({ title, subtitle, items, total, emptyL
           );
 
           return href ? (
-            <Link key={i} href={href} className="focus-ring -mx-2 block rounded-control px-2 transition-colors hover:bg-surface-2/60">
+            <Link key={i} href={href} className="focus-ring -mx-2 block rounded-control px-2 transition-colors hover:bg-chip-bg-2">
               {content}
             </Link>
           ) : (

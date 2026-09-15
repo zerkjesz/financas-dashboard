@@ -74,14 +74,14 @@ export default function CartoesPage() {
   return (
     <PageContainer>
       <header className="mb-6">
-        <h1 className="text-page-title text-text-primary">Cartão</h1>
-        <p className="text-caption text-text-muted">{card.name} — o que já está comprometido no crédito e quando isso alivia</p>
+        <p className="text-eyebrow text-text-muted mb-1">Cartão</p>
+        <h1 className="text-page-title text-text-primary">Cartão · {card.name}</h1>
       </header>
 
       <div className="space-y-4">
         <CardHero card={card} bill={current || card.currentBill} />
-        <CardBillTimeline next={next} later={later} />
-        <CardInstallmentsList purchases={purchases} />
+        <CardBillTimeline current={current || card.currentBill} next={next} later={later} />
+        <CardInstallmentsList purchases={purchases} current={current || card.currentBill} />
       </div>
 
       {/* Fase 5.4D.1, item "card wall check" — CORRIGIDO: um `rounded-card`
