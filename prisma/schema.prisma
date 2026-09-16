@@ -62,6 +62,7 @@ model Card {
   limitUpdates    CardLimitUpdate[]
   transfers       Transfer[]
   creditMovements CardCreditMovement[]
+  reconciliations CardBillReconciliation[]
 }
 
 model Income {
@@ -245,9 +246,38 @@ model CardBill {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  transfers Transfer[]
+  transfers       Transfer[]
+  reconciliations CardBillReconciliation[]
 
   @@unique([cardId, cycleMonth])
+}
+
+// Fase 7.0 (Telegram Conversacional) — reconciliação de fatura observada vs
+// calculada. Não existia NENHUM mecanismo de reconciliação de fatura antes
+// disto (auditado: RECONCILIATION_ADJUSTMENT só existia como valor solto do
+// enum DataConfidence, usado em scripts de migração one-shot, nunca como
+// model/serviço real). Espelha o padrão já usado por BalanceAdjustment pro
+// saldo de conta: histórico append-only (nunca sobrescreve), nunca cria
+// Expense/Income pra "tapar" a diferença — só registra explicitamente que
+// o usuário observou X quando o sistema calculava Y.
+model CardBillReconciliation {
+  id              String         @id @default(cuid())
+  cardBillId      String?
+  cardBill        CardBill?      @relation(fields: [cardBillId], references: [id], onDelete: SetNull)
+  cardId          String
+  card            Card           @relation(fields: [cardId], references: [id])
+  cycleMonth      String
+  observedTotal   Decimal        @db.Decimal(12, 2)
+  calculatedTotal Decimal        @db.Decimal(12, 2)
+  delta           Decimal        @db.Decimal(12, 2)
+  note            String?
+  source          String         @default("manual")
+  confidence      DataConfidence @default(RECONCILIATION_ADJUSTMENT)
+  rawMessage      String?
+  occurredAt      DateTime       @default(now())
+  createdAt       DateTime       @default(now())
+
+  @@index([cardId, cycleMonth])
 }
 
 // Fase 3.2 — reavaliado explicitamente e DECIDIDO NÃO adicionar `confidence` aqui.
@@ -755,7 +785,7 @@ model ImportBatch {
   // DataOperation (que agora pode ter N linhas pro mesmo batch).
   resultCounts    Json?
 
-  dataOperations  DataOperation[]
+  dataOperations DataOperation[]
 
   @@index([status, createdAt])
 }
