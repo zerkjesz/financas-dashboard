@@ -157,6 +157,11 @@ model Transfer {
   rawMessage    String?
   occurredAt    DateTime        @default(now())
   createdAt     DateTime        @default(now())
+  // Fase 7.0.1, item 3 — faltava aqui (Expense/Income já tinham). Necessário
+  // pro guard de estado obsoleto (optimistic concurrency) de uma correção via
+  // Telegram: sem isso, não dá pra detectar que um Transfer mudou entre o
+  // preview da correção e a confirmação.
+  updatedAt     DateTime        @updatedAt
 
   @@index([occurredAt])
 }
@@ -278,6 +283,31 @@ model CardBillReconciliation {
   createdAt       DateTime       @default(now())
 
   @@index([cardId, cycleMonth])
+}
+
+// Fase 7.0.1, item 3 — trilha de auditoria append-only pra toda correção/
+// exclusão/desfazer feita pelo pipeline conversacional em Expense/Income/
+// Transfer. NUNCA sobrescrita/apagada — cada operação (inclusive um undo)
+// grava uma linha NOVA, mesmo padrão de BalanceAdjustment/
+// CardBillReconciliation. `preimage` guarda o registro INTEIRO antes da
+// mutação (permite recriar de verdade num delete->undo, sem depender de só
+// um subconjunto de campos). `undoesAuditId` aponta pra linha original
+// quando esta linha É um undo — nunca a mesma linha é reescrita.
+model TelegramCorrectionAudit {
+  id               String   @id @default(cuid())
+  model            String // "expense" | "income" | "transfer" — único conjunto suportado nesta subfase.
+  recordId         String
+  action           String // "correct" | "delete" | "undo_correct" | "undo_delete"
+  preimage         Json // snapshot completo do registro ANTES desta operação.
+  fieldChanges     Json? // só presente em "correct"/"undo_correct" — o diff aplicado.
+  chatId           String?
+  telegramUpdateId String?
+  rawMessage       String?
+  undoesAuditId    String? // presente só em linhas "undo_*" — aponta pro id da linha revertida.
+  createdAt        DateTime @default(now())
+
+  @@index([model, recordId, createdAt])
+  @@index([chatId, createdAt])
 }
 
 // Fase 3.2 — reavaliado explicitamente e DECIDIDO NÃO adicionar `confidence` aqui.
