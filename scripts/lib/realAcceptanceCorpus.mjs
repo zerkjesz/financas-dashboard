@@ -64,7 +64,7 @@ export const MANDATORY_CASES = [
 export const EXTRA_CASES = [
   { id: "01", text: "pô gastei 23 no ifood ontem", expect: { kind: "action", type: "RECORD_EXPENSE", amount: "23.00" } },
   { id: "02", text: "slc, acabei de pagar 45 reais de uber", expect: { kind: "action", type: "RECORD_EXPENSE", amount: "45.00" } },
-  { id: "03", text: "45 farmacia pix", expect: { kind: "action", type: "RECORD_EXPENSE", amount: "45.00" } },
+  { id: "03", text: "45 farmacia pix", expect: { kind: "action", type: "RECORD_EXPENSE", amount: "45.00", paymentMethod: "pix" } },
   { id: "04", text: "gastei uns 30 conto no mercado hj de manha", expect: { kind: "action", type: "RECORD_EXPENSE", amount: "30.00" } },
   { id: "05", text: "recebi 3500 de salario hoje", expect: { kind: "action", type: "RECORD_INCOME", amount: "3500.00" } },
   { id: "06", text: "caiu um freela de 800 na conta", expect: { kind: "action", type: "RECORD_INCOME", amount: "800.00" } },
@@ -143,4 +143,35 @@ export const MULTI_TURN_CASES = [
     ],
     expectFinal: { kind: "action_or_correction", amount: "90.00" },
   },
+  {
+    // Fase 7.0.3, item 11, caso 3 — corrige o MEIO DE PAGAMENTO de uma
+    // action já pendente/aplicada (não o valor) — "era no vale, não no pix".
+    id: "MT-3",
+    turns: [
+      { text: "gastei 40 no mercado no pix", pendingAfter: null },
+      { text: "foi no vale, não no pix", usesPendingContext: false },
+    ],
+    expectFinal: { kind: "action_or_correction", amount: "40.00" },
+  },
+];
+
+// ----------------------------------------------------------------------------
+// Fase 7.0.3, item 9 — spot-check de gírias/abreviações ESPECÍFICAS pedidas
+// nesta fase, que não necessariamente já apareciam no corpus de 49
+// mensagens da Fase 7.0.2 (reaproveitado EXATAMENTE como está, item 7 —
+// isto aqui é um ADENDO separado, nunca uma alteração do corpus original).
+// Preservadas cruas, sem normalizar antes de mandar pro provider (item 9:
+// "não normalizar de um jeito que mascare incapacidade real do modelo").
+// ----------------------------------------------------------------------------
+export const INFORMAL_SPOT_CHECK_CASES = [
+  { id: "INF-1", text: "vei, gastei 25 no busao hj", expect: { kind: "action", type: "RECORD_EXPENSE", amount: "25.00" } },
+  { id: "INF-2", text: "aq gastei 18 no cafe", expect: { kind: "action", type: "RECORD_EXPENSE", amount: "18.00" } },
+  { id: "INF-3", text: "seg vou pagar 90 de internet", expect: { kind: "action_or_clarification" } },
+  { id: "INF-4", text: "meti em 3x uma compra de 300 no shopping", expect: { kind: "action", type: "RECORD_INSTALLMENT_PURCHASE", totalAmount: "300.00", installments: 3 } },
+  { id: "INF-5", text: "passei no crédito 150 de roupa", expect: { kind: "action", type: "RECORD_CARD_PURCHASE", amount: "150.00" } },
+  { id: "INF-6", text: "caiu meu salário, 4200", expect: { kind: "action", type: "RECORD_INCOME", amount: "4200.00" } },
+  { id: "INF-7", text: "a fatura virou 890,50", expect: { kind: "action", type: "SET_CARD_BILL_SNAPSHOT", amount: "890.50" } },
+  { id: "INF-8", text: "to com 2k na conta", expect: { kind: "action", type: "SET_ACCOUNT_BALANCE_SNAPSHOT" } },
+  { id: "INF-9", text: "anteontem gastei 60 de mercado", expect: { kind: "action", type: "RECORD_EXPENSE", amount: "60.00" } },
+  { id: "INF-10", text: "po, esqueci de lançar o gasto de ontem, foram 35 no almoço", expect: { kind: "action", type: "RECORD_EXPENSE", amount: "35.00" } },
 ];

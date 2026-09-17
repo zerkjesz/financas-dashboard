@@ -1,7 +1,9 @@
-// Fase 7.0.2, itens 3-7 — acceptance test do provider LLM REAL. Manual/
-// opt-in (nome NÃO começa com "test-" de propósito — o runner de regressão
-// nunca descobre isto sozinho, e isto NUNCA deve rodar em CI): precisa de
-// ANTHROPIC_API_KEY + ANTHROPIC_MODEL reais, faz chamadas HTTP reais (custo
+// Fase 7.0.2/7.0.3, itens 3-7 — acceptance test do provider LLM REAL.
+// Manual/opt-in (nome NÃO começa com "test-" de propósito — o runner de
+// regressão nunca descobre isto sozinho, e isto NUNCA deve rodar em CI):
+// precisa de credenciais reais (Anthropic OU Groq — item 5 da Fase 7.0.3:
+// provider-agnostic, o MESMO harness/corpus/scoring serve pra qualquer um
+// dos dois, nenhuma lógica duplicada), faz chamadas HTTP reais (custo
 // real), e o objetivo É validar como o modelo de verdade se comporta com
 // linguagem informal — o MockProvider não serve pra isso.
 //
@@ -16,13 +18,30 @@
 //     relatório, não escondido;
 //   - nunca loga a apiKey.
 //
-// USO:
-//   ANTHROPIC_API_KEY=sk-ant-... ANTHROPIC_MODEL=claude-sonnet-5 \
+// USO — usa o MESMO getConfiguredProvider() que a produção usa, então o
+// provider é escolhido por TELEGRAM_AI_PROVIDER (item 15: comparar modelos
+// no futuro é só trocar GROQ_MODEL/ANTHROPIC_MODEL e rodar de novo):
+//   TELEGRAM_AI_PROVIDER=groq GROQ_API_KEY=gsk_... GROQ_MODEL=openai/gpt-oss-120b \
 //     node scripts/telegram-ai-real-acceptance.mjs
-import { createAnthropicProvider } from "../lib/telegramAi/llmProvider.js";
+//   TELEGRAM_AI_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... ANTHROPIC_MODEL=claude-sonnet-5 \
+//     node scripts/telegram-ai-real-acceptance.mjs
+import { getConfiguredProvider } from "../lib/telegramAi/llmProvider.js";
 import { interpretFinancialMessage, INTERPRETER_RESULT_KIND } from "../lib/telegramAi/semanticInterpreter.js";
 import { evaluateConfirmationPolicy } from "../lib/telegramAi/confirmationPolicy.js";
-import { MANDATORY_CASES, EXTRA_CASES, ADVERSARIAL_CASES, MULTI_TURN_CASES } from "./lib/realAcceptanceCorpus.mjs";
+import { MANDATORY_CASES, EXTRA_CASES, ADVERSARIAL_CASES, MULTI_TURN_CASES, INFORMAL_SPOT_CHECK_CASES } from "./lib/realAcceptanceCorpus.mjs";
+
+// Fase 7.0.3, item 14 — free tier da Groq pro model candidato é bem
+// apertado (30 RPM / 8.000 tokens/min, auditado em
+// console.groq.com/docs/rate-limits, 2026-09) — o corpus inteiro (49 + 7
+// adversarial + multi-turn) facilmente estoura isso se disparado sem
+// pausa. Backoff explícito, nunca um loop agressivo de retry.
+const MAX_RETRIES_PER_CASE = 3;
+const DEFAULT_BACKOFF_MS = 15000; // usado só quando o provider não manda Retry-After.
+const INTER_REQUEST_PACING_MS = 2500; // espaçamento mínimo entre chamadas, mesmo sem rate limit — reduz a chance de bater o teto em primeiro lugar.
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 const FIXTURE_ACCOUNTS = [
   { id: "fixture-acc-itau", name: "Itaú", slug: "itau", type: "checking" },
@@ -37,17 +56,44 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
-async function interpret(text, provider, conversationContext = EMPTY_CONTEXT) {
-  return interpretFinancialMessage({
-    text,
-    now: todayIso(),
-    accounts: FIXTURE_ACCOUNTS,
-    cards: FIXTURE_CARDS,
-    categories: FIXTURE_CATEGORIES,
-    conversationContext,
-    financialContext: null,
-    provider,
-  });
+// Agregação de custo/uso (item 13) — só números, nunca conteúdo financeiro.
+const usageStats = { requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, latenciesMs: [], rateLimitEvents: 0 };
+
+// item 14 — 429 nunca é um PROVIDER_FAILURE de cara: espera (Retry-After se
+// vier, senão um backoff fixo), tenta de novo até MAX_RETRIES_PER_CASE. Se
+// esgotar as tentativas, ISSO SIM conta como falha real — nunca inventa um
+// "passou" pra um caso que não rodou de verdade.
+async function interpretWithBackoff(text, provider, conversationContext = EMPTY_CONTEXT) {
+  await sleep(INTER_REQUEST_PACING_MS);
+  for (let attempt = 0; attempt <= MAX_RETRIES_PER_CASE; attempt++) {
+    const result = await interpretFinancialMessage({
+      text,
+      now: todayIso(),
+      accounts: FIXTURE_ACCOUNTS,
+      cards: FIXTURE_CARDS,
+      categories: FIXTURE_CATEGORIES,
+      conversationContext,
+      financialContext: null,
+      provider,
+    });
+    usageStats.requests++;
+    if (result.latencyMs != null) usageStats.latenciesMs.push(result.latencyMs);
+    if (result.usage) {
+      usageStats.promptTokens += result.usage.promptTokens || 0;
+      usageStats.completionTokens += result.usage.completionTokens || 0;
+      usageStats.totalTokens += result.usage.totalTokens || 0;
+    }
+    if (result.kind !== INTERPRETER_RESULT_KIND.PROVIDER_RATE_LIMITED) return result;
+
+    usageStats.rateLimitEvents++;
+    if (attempt === MAX_RETRIES_PER_CASE) {
+      console.log(`     ⏳ rate limit persistente após ${MAX_RETRIES_PER_CASE} tentativas — contando como falha real, nunca como aprovado sem ter rodado.`);
+      return result; // PROVIDER_RATE_LIMITED vira PROVIDER_FAILURE no scoring (kind !== OK).
+    }
+    const waitMs = result.retryAfterSeconds != null ? result.retryAfterSeconds * 1000 : DEFAULT_BACKOFF_MS * (attempt + 1);
+    console.log(`     ⏳ 429 rate limit — aguardando ${Math.round(waitMs / 1000)}s antes de tentar de novo (tentativa ${attempt + 1}/${MAX_RETRIES_PER_CASE})...`);
+    await sleep(waitMs);
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -153,48 +199,60 @@ export function scoreCase(caseDef, result) {
     score.notes.push(`topic esperado=${expect.topic} obtido=${target?.topic}`);
   }
 
+  score.exactActionCount = expect.actionCount != null ? plan.actions.length === expect.actionCount : null;
   score.exactAmount = expect.amount != null ? target?.amount === expect.amount : expect.totalAmount != null ? target?.totalAmount === expect.totalAmount : null;
   score.exactDate = expect.date != null ? target?.date === expect.date : null;
   score.exactInstallments = expect.installments != null ? target?.installments === expect.installments : null;
-  score.exactPaymentMethod = expect.accountIncludes || expect.cardIncludes ? score.pass : null;
+  score.exactAccountsCards =
+    expect.accountIncludes != null || expect.cardIncludes != null
+      ? (expect.accountIncludes == null || (target?.account || "").toLowerCase().includes(expect.accountIncludes.toLowerCase())) &&
+        (expect.cardIncludes == null || (target?.card || "").toLowerCase().includes(expect.cardIncludes.toLowerCase()))
+      : null;
+  score.exactPaymentMethod = expect.paymentMethod != null ? target?.paymentMethod === expect.paymentMethod : null;
 
   return score;
 }
 
 async function main() {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  const model = process.env.ANTHROPIC_MODEL;
+  const providerName = process.env.TELEGRAM_AI_PROVIDER;
 
   const emptyReport = {
     REAL_CASES_TOTAL: 0,
     EXACT_ACTION_TYPE: "N/A",
+    EXACT_ACTION_COUNT: "N/A",
     EXACT_AMOUNTS: "N/A",
     EXACT_DATES: "N/A",
     EXACT_PAYMENT_METHODS: "N/A",
+    EXACT_ACCOUNTS_CARDS: "N/A",
     EXACT_INSTALLMENTS: "N/A",
     FALSE_POSITIVE_WRITES: "N/A",
     FALSE_NEGATIVE_FINANCIAL_INTENTS: "N/A",
     CLARIFICATIONS_REQUIRED: "N/A",
     SCHEMA_FAILURES: "N/A",
     PROVIDER_FAILURES: "N/A",
+    RATE_LIMIT_EVENTS: "N/A",
+    INJECTION_CASES: "N/A",
+    MULTI_TURN_REAL_PASSED: "N/A",
+    INFORMAL_LANGUAGE_SPOT_CHECK: "N/A",
     REQUIRED_CASES_A_TO_G: "0/7 (não executado)",
   };
 
-  if (!apiKey || !model) {
-    console.log("ANTHROPIC_API_KEY e/ou ANTHROPIC_MODEL não estão setadas neste ambiente.");
+  const provider = getConfiguredProvider();
+  if (!provider) {
+    console.log(`Provider não configurado/disponível (TELEGRAM_AI_PROVIDER=${JSON.stringify(providerName ?? null)}).`);
+    console.log("Precisa de TELEGRAM_AI_PROVIDER=anthropic|groq + as credenciais correspondentes (ANTHROPIC_API_KEY+ANTHROPIC_MODEL, ou GROQ_API_KEY+GROQ_MODEL).");
     console.log("Este é o acceptance test do provider REAL — opt-in, nunca roda sem credenciais reais, nunca em CI.");
     console.log("\nRELATÓRIO (nada executado):");
     console.log(JSON.stringify(emptyReport, null, 2));
     process.exit(0);
   }
 
-  const provider = createAnthropicProvider({ apiKey, model });
-  console.log(`Provider: Anthropic | Model: ${model}\n`);
+  console.log(`Provider: ${provider.name} | Model: ${process.env[provider.name === "groq" ? "GROQ_MODEL" : "ANTHROPIC_MODEL"]}\n`);
 
   const allCases = [...MANDATORY_CASES, ...EXTRA_CASES];
   const results = [];
   for (const c of allCases) {
-    const interpretation = await interpret(c.text, provider);
+    const interpretation = await interpretWithBackoff(c.text, provider);
     const score = scoreCase(c, interpretation);
     results.push(score);
     console.log(`${score.pass ? "✅" : "❌"} [${c.id}] "${c.text.slice(0, 60)}${c.text.length > 60 ? "…" : ""}" -> ${score.actualType || score.notes[0] || "?"}`);
@@ -209,6 +267,8 @@ async function main() {
   const falsePositiveWrites = results.filter((r) => r.falsePositiveWrite).length; // sempre 0 por construção (nunca escreve), mas contamos "geraria escrita indevida" mesmo assim.
   const falseNegatives = results.filter((r) => r.falseNegativeOrPositive === "expected_no_intent_got_action" || (r.notes || []).some((n) => n.includes("actionCount") && allCases.find((c) => c.id === r.id)?.expect.kind === "action" && !r.actualType)).length;
   const clarifications = results.filter((r) => r.actualType === "CLARIFICATION_REQUIRED").length;
+  const exactActionCount = results.filter((r) => r.exactActionCount === true).length;
+  const exactActionCountTotal = results.filter((r) => r.exactActionCount != null).length;
   const exactAmounts = results.filter((r) => r.exactAmount === true).length;
   const exactAmountsTotal = results.filter((r) => r.exactAmount != null).length;
   const exactDates = results.filter((r) => r.exactDate === true).length;
@@ -217,14 +277,17 @@ async function main() {
   const exactInstallmentsTotal = results.filter((r) => r.exactInstallments != null).length;
   const exactPaymentMethods = results.filter((r) => r.exactPaymentMethod === true).length;
   const exactPaymentMethodsTotal = results.filter((r) => r.exactPaymentMethod != null).length;
-  const exactActionType = results.filter((r) => r.pass || r.actualType).length;
+  const exactAccountsCards = results.filter((r) => r.exactAccountsCards === true).length;
+  const exactAccountsCardsTotal = results.filter((r) => r.exactAccountsCards != null).length;
 
   const report = {
     REAL_CASES_TOTAL: results.length,
     EXACT_ACTION_TYPE: `${results.filter((r) => r.pass).length}/${results.length}`,
+    EXACT_ACTION_COUNT: `${exactActionCount}/${exactActionCountTotal}`,
     EXACT_AMOUNTS: `${exactAmounts}/${exactAmountsTotal}`,
     EXACT_DATES: `${exactDates}/${exactDatesTotal}`,
     EXACT_PAYMENT_METHODS: `${exactPaymentMethods}/${exactPaymentMethodsTotal}`,
+    EXACT_ACCOUNTS_CARDS: `${exactAccountsCards}/${exactAccountsCardsTotal}`,
     EXACT_INSTALLMENTS: `${exactInstallments}/${exactInstallmentsTotal}`,
     FALSE_POSITIVE_WRITES: falsePositiveWrites,
     FALSE_NEGATIVE_FINANCIAL_INTENTS: falseNegatives,
@@ -235,17 +298,18 @@ async function main() {
   };
 
   // --------------------------------------------------------------------------
-  // Item 6 — adversarial/safety.
+  // Item 10 (Fase 7.0.3) / item 6 (Fase 7.0.2) — adversarial/safety.
   // --------------------------------------------------------------------------
   console.log("\n--- Adversarial / safety ---");
+  const secretValue = process.env[provider.name === "groq" ? "GROQ_API_KEY" : "ANTHROPIC_API_KEY"];
   let adversarialFailures = 0;
   for (const c of ADVERSARIAL_CASES) {
-    const interpretation = await interpret(c.text, provider);
+    const interpretation = await interpretWithBackoff(c.text, provider);
     let ok = true;
     const notes = [];
     if (interpretation.kind === INTERPRETER_RESULT_KIND.OK) {
       const raw = JSON.stringify(interpretation.plan);
-      if (raw.includes(apiKey)) {
+      if (secretValue && raw.includes(secretValue)) {
         ok = false;
         notes.push("VAZOU a api key no plano retornado");
       }
@@ -270,7 +334,7 @@ async function main() {
     if (!ok) adversarialFailures++;
     console.log(`${ok ? "✅" : "❌"} [${c.id}] "${c.text}" -> kind=${interpretation.kind}${notes.length ? " | " + notes.join("; ") : ""}`);
   }
-  report.INJECTION_TESTS_PASSED = `${ADVERSARIAL_CASES.length - adversarialFailures}/${ADVERSARIAL_CASES.length}`;
+  report.INJECTION_CASES = `${ADVERSARIAL_CASES.length - adversarialFailures}/${ADVERSARIAL_CASES.length}`;
 
   // --------------------------------------------------------------------------
   // Item 7 — multi-turn real (SEMPRE dry-run — nunca grava, contexto simulado
@@ -282,7 +346,7 @@ async function main() {
     let context = EMPTY_CONTEXT;
     let finalResult = null;
     for (const turn of mt.turns) {
-      finalResult = await interpret(turn.text, provider, context);
+      finalResult = await interpretWithBackoff(turn.text, provider, context);
       if (finalResult.kind === INTERPRETER_RESULT_KIND.OK) {
         const action = finalResult.plan.actions[0];
         // Simula o que conversationContext teria no PRÓXIMO turno, SEM
@@ -300,6 +364,44 @@ async function main() {
     if (!ok) multiTurnFailures++;
   }
   report.MULTI_TURN_REAL_PASSED = `${MULTI_TURN_CASES.length - multiTurnFailures}/${MULTI_TURN_CASES.length}`;
+
+  // --------------------------------------------------------------------------
+  // Fase 7.0.3, item 9 — spot-check de gírias/abreviações específicas.
+  // Relatado SEPARADO do corpus de 49 (que é reaproveitado EXATAMENTE como
+  // estava, item 7) — nunca infla REAL_CASES_TOTAL nem os outros campos.
+  // --------------------------------------------------------------------------
+  console.log("\n--- Português informal/gírias (item 9, spot-check separado) ---");
+  let informalFailures = 0;
+  for (const c of INFORMAL_SPOT_CHECK_CASES) {
+    const interpretation = await interpretWithBackoff(c.text, provider);
+    const score = scoreCase(c, interpretation);
+    console.log(`${score.pass ? "✅" : "❌"} [${c.id}] "${c.text}" -> ${score.actualType || score.notes[0] || "?"}`);
+    if (!score.pass) {
+      informalFailures++;
+      for (const n of score.notes) console.log(`     ${n}`);
+    }
+  }
+  report.INFORMAL_LANGUAGE_SPOT_CHECK = `${INFORMAL_SPOT_CHECK_CASES.length - informalFailures}/${INFORMAL_SPOT_CHECK_CASES.length}`;
+
+  report.RATE_LIMIT_EVENTS = usageStats.rateLimitEvents;
+
+  const avgLatency = usageStats.latenciesMs.length ? Math.round(usageStats.latenciesMs.reduce((a, b) => a + b, 0) / usageStats.latenciesMs.length) : null;
+  console.log("\n--- Custo/uso agregado (item 13, sanitizado — nunca conteúdo financeiro) ---");
+  console.log(
+    JSON.stringify(
+      {
+        provider: provider.name,
+        requests: usageStats.requests,
+        promptTokens: usageStats.promptTokens || "N/A (provider não devolveu usage)",
+        completionTokens: usageStats.completionTokens || "N/A",
+        totalTokens: usageStats.totalTokens || "N/A",
+        avgLatencyMs: avgLatency,
+        rateLimitEvents: usageStats.rateLimitEvents,
+      },
+      null,
+      2
+    )
+  );
 
   console.log("\nRELATÓRIO FINAL:");
   console.log(JSON.stringify(report, null, 2));
