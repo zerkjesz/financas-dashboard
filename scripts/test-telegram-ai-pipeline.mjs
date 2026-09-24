@@ -59,6 +59,10 @@ async function cleanup() {
   for (const i of strayIncomes) await prisma.income.delete({ where: { id: i.id } }).catch(() => {});
   const strayTransfers = await prisma.transfer.findMany({ where: { OR: [{ rawMessage: { contains: MARK } }, { description: { contains: MARK } }] } });
   for (const t of strayTransfers) await prisma.transfer.delete({ where: { id: t.id } }).catch(() => {});
+  // Varredura de reconciliações de fatura por MARK: pega o caso em que o teste
+  // aborta entre a criação e o `created.cardBillReconciliations.push`.
+  const strayReconciliations = await prisma.cardBillReconciliation.deleteMany({ where: { rawMessage: { contains: MARK } } }).catch(() => ({ count: 0 }));
+  if (strayReconciliations.count) console.log(`Reconciliações de fatura removidas por varredura: ${strayReconciliations.count}.`);
   const strayPurchases = await prisma.purchase.findMany({ where: { description: { contains: MARK } } });
   for (const p of strayPurchases) {
     await prisma.installment.deleteMany({ where: { purchaseId: p.id } }).catch(() => {});
@@ -184,7 +188,10 @@ async function main() {
 
     const confirmResult = await runMessage("sim", chatId, { provider: createMockProvider([]) });
     check('[D] "sim" aplica a reconciliação de fatura real', confirmResult.kind === PIPELINE_RESULT_KIND.REPLY, JSON.stringify(confirmResult));
-    const reconciliation = await prisma.cardBillReconciliation.findFirst({ where: { cardId: card.id, observedTotal: 1553.19 } });
+    // Identificada pelo MARK em rawMessage (nunca só por valor: 1553.19 é um
+    // valor real plausível — um registro genuíno com o mesmo total jamais pode
+    // ser confundido com o do teste nem apagado pelo cleanup).
+    const reconciliation = await prisma.cardBillReconciliation.findFirst({ where: { cardId: card.id, observedTotal: 1553.19, rawMessage: { contains: MARK } }, orderBy: { createdAt: "desc" } });
     check("[D] CardBillReconciliation real criada (mecanismo que não existia antes desta fase)", !!reconciliation && Number(reconciliation.delta) !== 0, JSON.stringify(reconciliation));
     if (reconciliation) created.cardBillReconciliations.push(reconciliation.id);
   }
