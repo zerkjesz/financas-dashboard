@@ -98,7 +98,12 @@ async function main() {
   const checks = {
     "uma única action": plan.actions.length === 1,
     "type = RECORD_EXPENSE": action?.type === "RECORD_EXPENSE",
-    "amount = 50.00": action?.amount === "50.00",
+    // Comparação NUMÉRICA, não string exata — achado real contra a API: a
+    // Groq pode devolver "50" em vez de "50.00" (ambos válidos pelo regex
+    // decimalString, mesmo valor monetário; lib/money.js sempre converte via
+    // Number() antes de qualquer conta, então "50" e "50.00" são idênticos
+    // em todo o resto do sistema).
+    "amount = 50.00 (comparação numérica)": Number(action?.amount) === 50,
     "description/merchant menciona gasolina": `${action?.description || ""} ${action?.merchant || ""}`.toLowerCase().includes("gasolina"),
     "paymentMethod = pix": action?.paymentMethod === "pix",
     "conta resolvível pra Itaú (paymentMethod=pix -> account itau nesta config)": true, // resolução de entidade real acontece no pipeline, não aqui — conferida pelos testes de pipeline.

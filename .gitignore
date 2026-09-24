@@ -16,3 +16,7 @@ scripts/snapshot-reports/
 # em runtime pelo acceptance harness read-only, nunca versionados.
 scripts/fase53a-targets.local.json
 scripts/lib/.bootstrap-authorized.json
+
+# Fase 7.0.3 — checkpoints/resultados do acceptance real (provider pago,
+# nunca versionados: são artefatos de execução local, não código-fonte).
+scripts/results/
