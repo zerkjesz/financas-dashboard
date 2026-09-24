@@ -22,6 +22,15 @@ import { serializeMoney } from "../lib/money.js";
 
 const targets = JSON.parse(readFileSync(new URL("./fase53a-targets.local.json", import.meta.url)));
 
+// Relógio CONTROLADO (Fase 7D.1, item 10). Os alvos de scripts/fase53a-targets.local.json
+// são um retrato de uma data específica (próxima recarga do VA em 2026-09-21,
+// próxima renda em 2026-09-24): comparar contra `new Date()` fazia o teste
+// quebrar sozinho quando o calendário andava (a lógica de produção estava
+// CORRETA — depois de 21/09 a próxima recarga é mesmo 21/10). O instante de
+// referência agora é fixo e explícito; nenhuma lógica financeira foi alterada.
+// Ao atualizar os alvos locais pra um novo retrato, atualize FASE53_AS_OF junto.
+const AS_OF = new Date(process.env.FASE53_AS_OF ?? "2026-09-20T15:00:00.000Z");
+
 let passed = 0;
 let failed = 0;
 function check(condition, label, extra = "") {
@@ -58,8 +67,8 @@ async function main() {
 
   const before = await fingerprint();
 
-  const summary = await buildFinancialEngineSummary({ now: new Date() });
-  const va = await buildVaSnapshot();
+  const summary = await buildFinancialEngineSummary({ now: AS_OF });
+  const va = await buildVaSnapshot({ now: AS_OF });
 
   console.log("--- Canonical engine output vs. targets ---");
   eq(summary.balances.unrestrictedCash, targets.unrestrictedCash, "unrestrictedCash (Itaú)");

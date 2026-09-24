@@ -18,6 +18,8 @@ import { selectDominantReason, freeMoneyLegend, shouldSuggestSimulation } from "
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const targets = JSON.parse(fs.readFileSync(path.join(__dirname, "fase53a-targets.local.json"), "utf8"));
+// Relógio controlado (Fase 7D.1, item 10) — ver test-fase53a-product-truth.mjs.
+const AS_OF = new Date(process.env.FASE53_AS_OF ?? "2026-09-20T15:00:00.000Z");
 
 let passed = 0;
 let failed = 0;
@@ -38,7 +40,7 @@ async function run() {
   console.log("--- Fase 5.4C: Home Truth Acceptance (branch dev, valores reais via fixture local) ---\n");
 
   const fpBefore = await fingerprint();
-  const financial = await buildProductFinancialSnapshot({});
+  const financial = await buildProductFinancialSnapshot({ now: AS_OF });
 
   // ---- Tabela de aceite estática (item 52) --------------------------------
   check(eq(financial.liquidity.unrestrictedCash, targets.unrestrictedCash), "unrestrictedCash bate com o alvo real", serializeMoney(financial.liquidity.unrestrictedCash).toString());

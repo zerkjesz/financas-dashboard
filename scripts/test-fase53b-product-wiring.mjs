@@ -45,7 +45,8 @@ async function fingerprint() {
 async function main() {
   console.log("--- Fase 5.3B: Product Wiring Acceptance (read-only) ---\n");
   const before = await fingerprint();
-  const now = new Date();
+  // Relógio controlado (Fase 7D.1, item 10) — ver comentário em test-fase53a-product-truth.mjs.
+  const now = new Date(process.env.FASE53_AS_OF ?? "2026-09-20T15:00:00.000Z");
 
   // --- item 35: os payloads que o PRODUTO realmente consome (não uma cópia) ---
   const snapshot = await buildProductFinancialSnapshot({ now });

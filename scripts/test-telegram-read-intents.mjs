@@ -9,8 +9,13 @@ assertTestEnvironment();
 
 import { prisma } from "../lib/prisma.js";
 import { money, compareMoney } from "../lib/money.js";
-import { handleReadIntent } from "../lib/telegramReads.js";
+import { handleReadIntent as handleReadIntentAt } from "../lib/telegramReads.js";
 import { buildProductFinancialSnapshot } from "../lib/productFinancialSnapshot.js";
+
+// Relógio controlado (Fase 7D.1, item 10) — os alvos locais são um retrato de
+// uma data; ver comentário em test-fase53a-product-truth.mjs.
+const AS_OF = new Date(process.env.FASE53_AS_OF ?? "2026-09-20T15:00:00.000Z");
+const handleReadIntent = (intent) => handleReadIntentAt(intent, { now: AS_OF });
 
 const targets = JSON.parse(readFileSync(new URL("./fase53a-targets.local.json", import.meta.url)));
 
@@ -101,7 +106,7 @@ async function main() {
   check(fpEqual(before, after), "[J] nenhuma das 7 READs gerou qualquer mutação financeira — fingerprint idêntico");
 
   // --- item 30 da entrega: comparação explícita WEB vs Telegram (mesma fonte) ---
-  const snapshot = await buildProductFinancialSnapshot({});
+  const snapshot = await buildProductFinancialSnapshot({ now: AS_OF });
   check(compareMoney(snapshot.liquidity.freeMoney, money(targets.freeMoney)) === 0, "[WEBvsTG] snapshot.liquidity.freeMoney (o MESMO que o dashboard usa) bate com o target — Telegram usou exatamente essa mesma chamada");
 
   console.log(`\n${passed}/${passed + failed} teste(s) passaram.`);
