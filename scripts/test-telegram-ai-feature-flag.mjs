@@ -42,18 +42,29 @@ async function main() {
   const originalFlag = process.env.TELEGRAM_AI_ENABLED;
 
   // ==========================================================================
-  // TELEGRAM_AI_ENABLED=false (default seguro) — pipeline AI NUNCA chamado,
-  // mensagem financeira simples é tratada 100% pelo parser legado.
+  // TELEGRAM_AI_ENABLED=false (default seguro) — pipeline AI NUNCA chamado.
+  //
+  // Fase 7D (2026-09-24) — MUDANÇA DE PRODUTO: o parser legado (regex,
+  // parseTransaction) deixou de ser o fallback padrão pra texto livre FORA
+  // de um wizard/confirmação pendente (lib/telegramUpdateHandler.js:
+  // dispatchUpdate, item 2 do pedido — "não interpretar financeiramente por
+  // regex/AI fora do wizard"). Esta seção testava exatamente o
+  // comportamento OPOSTO (parser legado cria Expense a partir de texto frio)
+  // — atualizado aqui pra refletir a decisão de produto atual: mensagem fria
+  // sem contexto de wizard nunca mais cria um registro financeiro sozinha,
+  // com flag ligada ou desligada; devolve o nudge pro menu (nunca a
+  // mensagem de segurança do pipeline AI, que é uma coisa DIFERENTE — prova
+  // que a rejeição vem do roteamento novo, não do pipeline AI).
   // ==========================================================================
   {
     process.env.TELEGRAM_AI_ENABLED = "false";
     const chatId = `${MARK}_off`;
     const outbox = await runDispatch(`${MARK} gastei 50 de gasolina no pix`, chatId);
-    check("[flag=false] gerou alguma resposta (parser legado processou a mensagem)", outbox.length > 0, JSON.stringify(outbox));
+    check("[flag=false, Fase 7D] gerou alguma resposta (nudge pro menu)", outbox.length > 0, JSON.stringify(outbox));
     const reply = outbox[0]?.args?.[1] || "";
-    check("[flag=false] resposta NÃO é a mensagem de segurança do pipeline AI (prova que ele nunca rodou)", reply !== PROVIDER_UNAVAILABLE_MESSAGE, reply);
+    check("[flag=false, Fase 7D] resposta NÃO é a mensagem de segurança do pipeline AI (rejeição vem do roteamento determinístico, não do pipeline AI)", reply !== PROVIDER_UNAVAILABLE_MESSAGE, reply);
     const expense = await prisma.expense.findFirst({ where: { rawMessage: { contains: `${MARK} gastei 50 de gasolina` } } });
-    check("[flag=false] Expense real foi criada PELO PARSER LEGADO (só ele grava sem provider — prova definitiva de que rodou)", !!expense, JSON.stringify(expense));
+    check("[flag=false, Fase 7D] NENHUMA Expense criada a partir de texto livre frio (item 2: texto livre nunca interpreta finanças fora do wizard)", !expense, JSON.stringify(expense));
     if (expense) createdExpenseIds.push(expense.id);
     const aiPending = await prisma.pendingBotMessage.findUnique({ where: { chatId } });
     check("[flag=false] nenhum PendingBotMessage do pipeline AI foi criado", !aiPending || aiPending.intent !== "financial_ai_plan");
