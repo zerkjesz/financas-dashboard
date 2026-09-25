@@ -163,6 +163,8 @@ model Transfer {
   // preview da correção e a confirmação.
   updatedAt     DateTime        @updatedAt
 
+  settledCommitment ConfirmedCommitment?
+
   @@index([occurredAt])
 }
 
@@ -321,11 +323,24 @@ model RecurringRule {
   name       String // "Vale Alimentação - Recarga", "Aluguel", "Luz", "Internet", "Salário"
   kind       String // "income" | "expense"
   amount     Decimal? @db.Decimal(12, 2) // null se variável (ex: luz muda todo mês)
-  dayOfMonth Int // 1-31
+  // Fase 9.1 — nullable: conta da casa com vencimento ainda desconhecido (internet, água, energia...).
+  // Nunca um dia inventado; consumidores tratam null como "vencimento não informado".
+  dayOfMonth Int? // 1-31
   accountId  String?
   account    Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
   category   String?
   isActive   Boolean  @default(true)
+  // Fase 9.1 — contas recorrentes da casa. amountKind: "FIXED" (valor fixo em `amount`),
+  // "APPROXIMATE" (`amount` é aproximado, pode ser ajustado ao pagar) ou "VARIABLE"
+  // (`amount` null; o valor real é informado por competência — referenceMin/Max são só a faixa
+  // "normal", nunca cobrança). partsPerCycle > 1 = a competência tem N pagamentos iguais
+  // (faxina quinzenal: amount 260, partsPerCycle 2 => 2 x 130). cadence é só rótulo de UI.
+  amountKind    String   @default("FIXED")
+  partsPerCycle Int      @default(1)
+  cadence       String   @default("MONTHLY")
+  referenceMin  Decimal? @db.Decimal(12, 2)
+  referenceMax  Decimal? @db.Decimal(12, 2)
+  notes         String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -343,10 +358,11 @@ model Bill {
   category        String?         @default("Outros")
   accountId       String?
   account         Account?        @relation(fields: [accountId], references: [id], onDelete: SetNull)
-  dueDate         DateTime
+  dueDate         DateTime? // Fase 9.1 — null = vencimento não informado (conta recorrente da casa sem dia definido)
   recurringRuleId String?
   recurringRule   RecurringRule?  @relation(fields: [recurringRuleId], references: [id], onDelete: SetNull)
   cycleMonth      String? // só quando gerada a partir de uma RecurringRule ("2026-09")
+  part            Int             @default(1) // Fase 9.1 — 1..partsPerCycle (faxina: 2 visitas => 2 Bills na mesma competência)
   status          String          @default("pending") // "pending" | "paid" | "overdue" | "cancelled"
   notes           String?
   source          String          @default("manual") // "manual" | "telegram"
@@ -359,7 +375,7 @@ model Bill {
 
   expense Expense?
 
-  @@unique([recurringRuleId, cycleMonth])
+  @@unique([recurringRuleId, cycleMonth, part])
   @@index([dueDate])
   @@index([status])
 }
@@ -550,6 +566,14 @@ model ConfirmedCommitment {
   settledAt DateTime?
   expenseId String?   @unique // impede dois commitments settled no mesmo Expense
   expense   Expense?  @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+
+  // Fase 9.1 — devolução de capital NÃO é despesa: settlementMode "EXTERNAL_TRANSFER" liquida o
+  // compromisso com uma Transfer (conta -> fora do Norte), vinculada aqui; "EXPENSE" (default) é o
+  // comportamento anterior (Expense). shortLabel = nome curto pra resumos ("CNPJ").
+  settlementMode    String    @default("EXPENSE")
+  settledTransferId String?   @unique
+  settledTransfer   Transfer? @relation(fields: [settledTransferId], references: [id], onDelete: SetNull)
+  shortLabel        String?
 
   notes      String?
   confidence DataConfidence?
