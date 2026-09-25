@@ -152,6 +152,12 @@ export default function ResultPanel({ result }) {
 
       <ProjectionDeltaRail delta={result.delta.projectionCheckpoints.base} />
 
+      {result.houseBills?.note && (
+        <p role="note" className="text-caption text-text-muted px-1">
+          {result.houseBills.note}
+        </p>
+      )}
+
       {result.explanation?.length > 0 && (
         <div className="rounded-card bg-surface shadow-card p-5">
           <Disclosure summary="Como isso foi calculado">

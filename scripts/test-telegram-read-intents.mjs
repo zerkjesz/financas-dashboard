@@ -11,11 +11,15 @@ import { prisma } from "../lib/prisma.js";
 import { money, compareMoney } from "../lib/money.js";
 import { handleReadIntent as handleReadIntentAt } from "../lib/telegramReads.js";
 import { buildProductFinancialSnapshot } from "../lib/productFinancialSnapshot.js";
+import { withCanonicalWorld } from "./lib/canonicalWorld.js";
 
 // Relógio controlado (Fase 7D.1, item 10) — os alvos locais são um retrato de
 // uma data; ver comentário em test-fase53a-product-truth.mjs.
 const AS_OF = new Date(process.env.FASE53_AS_OF ?? "2026-09-20T15:00:00.000Z");
-const handleReadIntent = (intent) => handleReadIntentAt(intent, { now: AS_OF });
+// Fase 9.1.1 — todas as leituras rodam num "mundo canônico" isolado (transação SEMPRE revertida; ver
+// scripts/lib/canonicalWorld.js): independe de estruturas legítimas criadas depois do retrato (CNPJ, contas da casa).
+let TX;
+const handleReadIntent = (intent) => handleReadIntentAt(intent, { now: AS_OF, client: TX });
 
 const targets = JSON.parse(readFileSync(new URL("./fase53a-targets.local.json", import.meta.url)));
 
@@ -55,7 +59,7 @@ function containsMoney(text, expectedValue) {
   return normalizedText.includes(expectedNormalized) || normalizedText.includes(`-${expectedNormalized}`) || normalizedText.includes(expectedNormalized.replace("-", ""));
 }
 
-async function main() {
+async function mainInWorld() {
   console.log("--- Fase 5.3D: Telegram Read Test Matrix (contra DEV real) ---\n");
 
   const before = await fingerprint();
@@ -106,10 +110,17 @@ async function main() {
   check(fpEqual(before, after), "[J] nenhuma das 7 READs gerou qualquer mutação financeira — fingerprint idêntico");
 
   // --- item 30 da entrega: comparação explícita WEB vs Telegram (mesma fonte) ---
-  const snapshot = await buildProductFinancialSnapshot({ now: AS_OF });
+  const snapshot = await buildProductFinancialSnapshot({ now: AS_OF, client: TX });
   check(compareMoney(snapshot.liquidity.freeMoney, money(targets.freeMoney)) === 0, "[WEBvsTG] snapshot.liquidity.freeMoney (o MESMO que o dashboard usa) bate com o target — Telegram usou exatamente essa mesma chamada");
 
   console.log(`\n${passed}/${passed + failed} teste(s) passaram.`);
+}
+
+async function main() {
+  await withCanonicalWorld(async (tx) => {
+    TX = tx;
+    await mainInWorld();
+  });
   await prisma.$disconnect();
   if (failed > 0) process.exit(1);
 }

@@ -19,6 +19,7 @@ import { money, compareMoney } from "../lib/money.js";
 import { buildFinancialEngineSummary } from "../lib/financialEngine.js";
 import { buildVaSnapshot } from "../lib/vaPanel.js";
 import { serializeMoney } from "../lib/money.js";
+import { withCanonicalWorld } from "./lib/canonicalWorld.js";
 
 const targets = JSON.parse(readFileSync(new URL("./fase53a-targets.local.json", import.meta.url)));
 
@@ -67,7 +68,8 @@ async function main() {
 
   const before = await fingerprint();
 
-  const summary = await buildFinancialEngineSummary({ now: AS_OF });
+  // Fase 9.1.1 — mundo canônico isolado (transação revertida): independe do estado ambiente do DEV.
+  const summary = await withCanonicalWorld((tx) => buildFinancialEngineSummary({ now: AS_OF, client: tx }));
   const va = await buildVaSnapshot({ now: AS_OF });
 
   console.log("--- Canonical engine output vs. targets ---");

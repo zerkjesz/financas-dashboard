@@ -143,6 +143,7 @@ export default function HomeV4() {
                 </div>
               </>
             )}
+            {h.unpricedBills?.count > 0 && <div className="n4-hero-note" role="note">{h.unpricedBills.text}</div>}
           </div>
 
           {/* compacto: recibo */}
@@ -153,6 +154,7 @@ export default function HomeV4() {
             {h.safetyReserve > 0 && <Receipt op="−" label="Folga de segurança" value={fmt(h.safetyReserve)} dim rule />}
             <Receipt op="=" label="Seguro para gastar" value={fmt(h.safe)} lime />
             {h.vaBalance != null && <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.55)", marginTop: 6 }}>VA {fmt(h.vaBalance)} fica de fora: é só para comida.</div>}
+            {h.unpricedBills?.count > 0 && <div className="n4-hero-note" role="note">{h.unpricedBills.text}</div>}
           </div>
         </section>
 

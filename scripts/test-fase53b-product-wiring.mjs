@@ -9,6 +9,7 @@ assertTestEnvironment();
 import { prisma } from "../lib/prisma.js";
 import { money, compareMoney, serializeMoney } from "../lib/money.js";
 import { buildProductFinancialSnapshot } from "../lib/productFinancialSnapshot.js";
+import { withCanonicalWorld } from "./lib/canonicalWorld.js";
 import { buildBaseProjection } from "../lib/financialProjection.js";
 
 const targets = JSON.parse(readFileSync(new URL("./fase53a-targets.local.json", import.meta.url)));
@@ -49,7 +50,8 @@ async function main() {
   const now = new Date(process.env.FASE53_AS_OF ?? "2026-09-20T15:00:00.000Z");
 
   // --- item 35: os payloads que o PRODUTO realmente consome (não uma cópia) ---
-  const snapshot = await buildProductFinancialSnapshot({ now });
+  // Fase 9.1.1 — mundo canônico isolado (transação revertida): independe do estado ambiente do DEV.
+  const snapshot = await withCanonicalWorld((tx) => buildProductFinancialSnapshot({ now, client: tx }));
 
   console.log("--- Product read model vs. targets canônicos ---");
   eq(snapshot.liquidity.unrestrictedCash, targets.unrestrictedCash, "financial.liquidity.unrestrictedCash");

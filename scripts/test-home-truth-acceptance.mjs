@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { prisma } from "../lib/prisma.js";
 import { compareMoney, serializeMoney } from "../lib/money.js";
 import { buildProductFinancialSnapshot } from "../lib/productFinancialSnapshot.js";
+import { withCanonicalWorld } from "./lib/canonicalWorld.js";
 import { selectDominantReason, freeMoneyLegend, shouldSuggestSimulation } from "../lib/homePresentation.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -40,7 +41,8 @@ async function run() {
   console.log("--- Fase 5.4C: Home Truth Acceptance (branch dev, valores reais via fixture local) ---\n");
 
   const fpBefore = await fingerprint();
-  const financial = await buildProductFinancialSnapshot({ now: AS_OF });
+  // Fase 9.1.1 — mundo canônico isolado (transação revertida): independe do estado ambiente do DEV.
+  const financial = await withCanonicalWorld((tx) => buildProductFinancialSnapshot({ now: AS_OF, client: tx }));
 
   // ---- Tabela de aceite estática (item 52) --------------------------------
   check(eq(financial.liquidity.unrestrictedCash, targets.unrestrictedCash), "unrestrictedCash bate com o alvo real", serializeMoney(financial.liquidity.unrestrictedCash).toString());

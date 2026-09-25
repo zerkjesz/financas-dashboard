@@ -267,18 +267,40 @@ function PlanCard({ c, flash, onPay, onUndo }) {
       {c.sub && <div className="n4-pcard-hint">{c.sub}</div>}
       <div style={{ marginTop: "auto" }}>
         {c.notDone ? (
-          <button type="button" className="n4-pay" onClick={onPay}>
-            <Ico name={c.ctaIcon} size={15} stroke="#c9ff29" width={2} />
-            <span>{c.cta}</span>
-          </button>
+          <>
+            <button type="button" className="n4-pay" onClick={onPay}>
+              <Ico name={c.ctaIcon} size={15} stroke="#c9ff29" width={2} />
+              <span>{c.cta}</span>
+            </button>
+            <ReopenList c={c} onUndo={onUndo} />
+          </>
         ) : (
           <div className="n4-done-box">
             <div className="n4-check n4-pop"><Ico name="check" size={12} stroke="#0b0b0c" width={2.8} /></div>
             <span className="t">{c.doneTxt}</span>
-            {c.item.undo && <button type="button" className="n4-undo-link" onClick={() => onUndo(c.item.undo)} aria-label={`Desfazer pagamento de ${c.name}`}>Desfazer</button>}
+            {c.item.undo && !isMultiPart(c) && <button type="button" className="n4-undo-link" onClick={() => onUndo(c.item.undo)} aria-label={`Desfazer pagamento de ${c.name}`}>Desfazer</button>}
           </div>
         )}
+        {!c.notDone && <ReopenList c={c} onUndo={onUndo} />}
       </div>
+    </div>
+  );
+}
+
+const isMultiPart = (c) => c.item.kind === "casa" && c.item.casa.partsTotal > 1;
+
+// Fase 9.1.1 — "Reabrir" persistente por visita/conta já paga (não depende do toast).
+function ReopenList({ c, onUndo }) {
+  if (!isMultiPart(c)) return null;
+  const parts = (c.item.casa.paidParts ?? []).filter((p) => p.undo);
+  if (parts.length === 0) return null;
+  return (
+    <div className="n4-reopen">
+      {parts.map((p) => (
+        <button type="button" key={p.part} className="n4-undo-link" onClick={() => onUndo(p.undo)} aria-label={`Reabrir ${p.part}ª visita de ${c.name}, paga ${p.when}`}>
+          Reabrir {p.part}ª visita · {fmt(p.amount)}{p.withoutExpense ? " · fora do Norte" : p.sourceName ? ` · ${p.sourceName}` : ""}
+        </button>
+      ))}
     </div>
   );
 }
