@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Receipt, CreditCard, Repeat } from "lucide-react";
 import { formatMoney, formatDate } from "@/lib/formatMoney";
-import { obligationItemLabel, obligationItemDate, obligationItemHref, OBLIGATION_CLASS_LABEL } from "@/lib/commitmentsPresentation";
+import { obligationItemLabel, obligationItemDate, obligationItemHref, obligationItemHasNoDueDate, obligationItemCaption, OBLIGATION_CLASS_LABEL } from "@/lib/commitmentsPresentation";
 
 // Fase 6.0 (Design Freeze) — RESTYLE. A taxonomia de dado não muda: os
 // mesmos itens de `incurred`/`dueBeforeIncome` (já anotados com `.type` —
@@ -52,7 +52,9 @@ function GroupCard({ icon: Icon, title, caption, total, items, dark = false }) {
               <span className={`tabular text-xs ${dark ? "text-white/50" : "text-text-muted"}`}>{date ? formatDate(date) : "—"}</span>
               <span className="min-w-0">
                 <span className={`block truncate text-sm ${dark ? "text-white/90" : "text-text-secondary"}`}>{label}</span>
-                {classLabel && <span className={`block text-caption ${dark ? "text-white/40" : "text-text-muted"}`}>{classLabel}</span>}
+                {obligationItemCaption(item, classLabel) && (
+                  <span className={`block text-caption ${dark ? "text-white/40" : "text-text-muted"}`}>{obligationItemCaption(item, classLabel)}</span>
+                )}
               </span>
               <span className={`tabular text-right text-sm font-medium ${dark ? "text-white" : "text-text-primary"}`}>{formatMoney(item.amount)}</span>
             </div>

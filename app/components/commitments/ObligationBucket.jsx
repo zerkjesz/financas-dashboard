@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { formatMoney, formatDate } from "@/lib/formatMoney";
-import { obligationItemLabel, obligationItemDate, obligationItemHref, OBLIGATION_CLASS_LABEL } from "@/lib/commitmentsPresentation";
+import { obligationItemLabel, obligationItemDate, obligationItemHref, obligationItemHasNoDueDate, obligationItemCaption, OBLIGATION_CLASS_LABEL } from "@/lib/commitmentsPresentation";
 
 // Fase 6.0 (Design Freeze) — RESTYLE. Bucket genérico reaproveitado por
 // "Mais pra frente" (item 26/28/30 original) — conteúdo real que a
@@ -35,6 +35,9 @@ export default function ObligationBucket({ title, subtitle, items, total, muted 
                   <div className="text-caption text-text-muted">
                     {classLabel ? `${classLabel} · ` : ""}até {formatDate(date)}
                   </div>
+                )}
+                {!date && obligationItemHasNoDueDate(item) && (
+                  <div className="text-caption text-text-muted">{obligationItemCaption(item, classLabel)}</div>
                 )}
               </div>
               <div className="tabular shrink-0 font-medium text-text-primary">{formatMoney(item.amount)}</div>

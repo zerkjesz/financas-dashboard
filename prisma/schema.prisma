@@ -532,7 +532,9 @@ model ConfirmedCommitment {
   id          String                    @id @default(cuid())
   description String
   amount      Decimal                   @db.Decimal(12, 2)
-  dueDate     DateTime
+  // Fase 8.0.1 — nullable: um compromisso real pode não ter prazo definido pelo usuário
+  // ("Sem prazo definido"). Nunca preencher com data fictícia; consumidores tratam null.
+  dueDate     DateTime?
   status      ConfirmedCommitmentStatus @default(CONFIRMED)
 
   // Origem do funding — no máximo uma das duas é usada na prática (a v1 dos

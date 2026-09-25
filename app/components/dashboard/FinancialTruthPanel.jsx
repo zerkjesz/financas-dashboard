@@ -68,8 +68,9 @@ export default function FinancialTruthPanel({ financial }) {
                 <div className="min-w-0">
                   <div className="text-slate-200 truncate">{itemLabel(item)}</div>
                   <div className="text-xs text-muted">
-                    {CLASS_LABEL[item.class] || item.class}
-                    {itemDueDate(item) ? ` · até ${formatDate(itemDueDate(item))}` : ""}
+                    {item.type === "ConfirmedCommitment" && !itemDueDate(item)
+                      ? (item.status === "FUNDED" ? "Dinheiro separado · Sem prazo definido" : "Sem prazo definido")
+                      : `${CLASS_LABEL[item.class] || item.class}${itemDueDate(item) ? ` · até ${formatDate(itemDueDate(item))}` : ""}`}
                   </div>
                 </div>
                 <span className="tabular text-white font-medium shrink-0 pl-2">{formatMoney(item.amount)}</span>
