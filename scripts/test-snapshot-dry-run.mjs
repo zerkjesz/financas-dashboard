@@ -1023,14 +1023,17 @@ console.log("--- Fase 5.0.1: testes sintéticos do snapshot-dry-run ---\n");
     check("todo item do manifesto tem os 15 campos do formato estrito", manifest.every((m) => ["sequence", "operation", "model", "existingRecordId", "naturalKey", "before", "after", "amountEffectOnAccount", "amountEffectOnLiability", "source", "confidence", "reason", "dependency", "idempotencyCheck", "rollbackStrategy", "status"].every((k) => k in m)));
     check("sequence é única e crescente (1..N sem buracos)", manifest.every((m, i) => m.sequence === i + 1));
 
-    const reclass = manifest.find((m) => m.model === "Income" && m.naturalKey.includes("33"));
+    // Fase 10 — casamento DETERMINÍSTICO por `amount=`. Antes: naturalKey.includes("33"/"75"/"40"), que também
+    // casava com trechos do `accountId` (cuid aleatório) e fazia o teste falhar ~1 vez em 5 (flake pré-existente).
+    const hasAmount = (m, v) => new RegExp(`(^|[ ,])amount=${v}(\\.0+)?(,|$)`).test(m.naturalKey);
+    const reclass = manifest.find((m) => m.model === "Income" && hasAmount(m, 33));
     check("reclassificação R$33 resolve o id REAL do Income persistido (nunca cria um novo)", reclass?.existingRecordId === incomeToReclassify.id);
     check("reclassificação R$33 é APPROVED_CANDIDATE (fato + id resolvidos)", reclass?.status === "APPROVED_CANDIDATE");
 
-    const dupExpense = manifest.find((m) => m.model === "Expense" && m.naturalKey.includes("75"));
+    const dupExpense = manifest.find((m) => m.model === "Expense" && hasAmount(m, 75));
     check("[prevenção de duplicata] gasto de R$75 na MESMA data de um já existente -> BLOCKED, nunca CREATE silencioso", dupExpense?.status === "BLOCKED" && dupExpense?.existingRecordId === preexistingDuplicate.id);
 
-    const newIncome = manifest.find((m) => m.model === "Income" && m.naturalKey.includes("40"));
+    const newIncome = manifest.find((m) => m.model === "Income" && hasAmount(m, 40));
     check("[nunca dedup só por valor] renda de R$40 em data DIFERENTE do achado por valor -> CREATE aprovado, não bloqueado por falso-positivo", newIncome?.status === "APPROVED_CANDIDATE" && newIncome?.operation === "CREATE");
 
     const cardBillEntry = manifest.find((m) => m.model === "CardBill" && m.existingRecordId === "cb-fake-update");
