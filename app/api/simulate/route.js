@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { deepSerializeMoney } from "@/lib/money";
 import { simulateFinancialScenario, SIMULATION_SCENARIO_TYPE, SimulationInputError } from "@/lib/simulation/financialSimulator";
+import { buildItauModel } from "@/lib/cardsItau";
+import { evaluateCardCapacity } from "@/lib/cardsItauPure";
 
 // Fase 5.3E — /api/simulate. COMPUTE-ONLY: chama simulateFinancialScenario
 // (100% leitura + overlay em memória, nunca escreve nada) e devolve o
@@ -29,6 +31,16 @@ export async function POST(request) {
 
   try {
     const result = await simulateFinancialScenario({ scenario: { type, ...rest } });
+    // Fase 10 — o MESMO julgamento de limite da área /cartoes (limite disponível NÃO é autoritativo: faixa estimada +
+    // teto certo). Aditivo: os campos antigos (cardFeasibility etc.) seguem intactos; o orçamento já é idêntico.
+    if (result.cardFeasibility) {
+      try {
+        const itau = await buildItauModel({ cardId: result.cardFeasibility.cardId });
+        if (itau) result.cardCapacity = evaluateCardCapacity(itau.limit, Number(result.cardFeasibility.totalAmount.toString()));
+      } catch (e) {
+        console.error("[api/simulate] capacidade do limite indisponível:", e.message);
+      }
+    }
     return NextResponse.json(deepSerializeMoney(result));
   } catch (err) {
     if (err instanceof SimulationInputError) {

@@ -35,6 +35,13 @@ function monthLabel(billMonth) {
   return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("pt-BR", { month: "short", year: "2-digit", timeZone: "UTC" }).replace(".", "");
 }
 
+const CAPACITY_COPY = {
+  FITS_LIKELY: "esta compra deve caber.",
+  UNCERTAIN: "esta compra pode caber, mas não dá para confirmar.",
+  UNLIKELY: "esta compra provavelmente não cabe.",
+  EXCEEDS: "esta compra não cabe.",
+};
+
 export default function ResultPanel({ result }) {
   const band = VERDICT_BANDS[result.verdict] || VERDICT_BANDS.NOT_SAFE;
   const deltaFreeMoney = Number(result.delta.freeMoney);
@@ -107,6 +114,11 @@ export default function ResultPanel({ result }) {
               {result.cardFeasibility.verdict === "CAN_AUTHORIZE" ? "O limite comporta" : "O limite não comporta"}
             </div>
             <p className="text-caption text-text-muted">{FEASIBILITY_COPY[result.cardFeasibility.verdict]}</p>
+            {result.cardCapacity && (
+              <p className="text-caption text-text-muted mt-2" role="note">
+                Limite disponível não reconciliado com o banco: {CAPACITY_COPY[result.cardCapacity.status]} Estimado entre {formatMoney(result.cardCapacity.availableLimit.low)} e {formatMoney(result.cardCapacity.availableLimit.high)}; no máximo {formatMoney(result.cardCapacity.availableLimit.ceiling)}.
+              </p>
+            )}
           </div>
         )}
         <div className="rounded-card bg-surface shadow-card p-5">
