@@ -89,13 +89,19 @@ export function cardView(item) {
       if (!done) segs = segs.map((s, i) => (i === c.partsPaid ? { bg: "transparent", line: s.line } : s));
     }
     const nth = c.part;
+    if (item.beforeNextIncome) {
+      // Fase 9.1.2 — conta de OUTRA competência que vence antes da próxima renda: já está no comprometido.
+      const dd = new Date(c.dueDate);
+      detail = `Vence ${String(dd.getUTCDate()).padStart(2, "0")}/${String(dd.getUTCMonth() + 1).padStart(2, "0")}`;
+      sub = `Vence antes da sua próxima renda${c.beforeIncomeLabel ? ` de ${c.beforeIncomeLabel}` : ""}.${awaiting ? " Valor ainda não informado." : ""}`;
+    }
     return {
       ...base,
       icon: casaIcon(item.name),
       valueTxt,
       valueFaint: awaiting,
       detail,
-      chip: awaiting ? "Aguardando valor" : over ?? (approx && !done ? "Valor aproximado" : null),
+      chip: awaiting ? "Aguardando valor" : item.beforeNextIncome ? "Antes da renda" : over ?? (approx && !done ? "Valor aproximado" : null),
       chipTone: awaiting || over ? "warn" : "",
       sub,
       segs,
@@ -190,12 +196,22 @@ export function doneList(model) {
     .map((i) => ({ id: i.id, name: i.name, line: i.done.line, value: fmt(i.done.value), when: doneWhen(i), undo: i.undo }));
 }
 
+// Fase 9.1.2 — seção "Antes da próxima renda": obrigações de outra competência que vencem até a próxima renda.
+export function beforeIncomeSection(model) {
+  const b = model.beforeNextIncome;
+  if (!b || !b.items.length) return null;
+  const bits = [b.nextIncomeLabel ? `Vencem até ${b.nextIncomeLabel}` : "Vencem antes da próxima renda", b.knownTotal > 0 ? fmt(b.knownTotal) : null, b.unpricedCount ? `${b.unpricedCount} aguardando valor` : null].filter(Boolean);
+  return { id: "before", type: "cards", title: "Antes da próxima renda", sub: bits.join(" · "), items: b.items.map(cardView) };
+}
+
 export function sectionsFor(tab, model) {
   const cards = model.items.map(cardView);
+  const before = beforeIncomeSection(model);
   const s = model.summary;
   const est = casaMonthlyEstimate(model);
   if (tab === "mes") {
     const out = [{ id: "pending", type: "cards", title: "Precisa da sua atenção", sub: pendingSubtitle(model), items: cards.filter((c) => c.notDone) }];
+    if (before) out.push(before);
     if (model.funded.length) out.push({ id: "funded", type: "funded", title: "Guardado para um destino", sub: "Não entra na contagem do mês", items: model.funded });
     const done = doneList(model);
     out.push({ id: "done", type: "done", title: "Concluídos", sub: `${s.resolved} de ${s.total} · ${fmt(s.paidAmount)}`, items: done });
@@ -210,7 +226,9 @@ export function sectionsFor(tab, model) {
   }
   if (tab === "casa") {
     const cc = cards.filter((c) => c.item.kind === "casa");
-    return [{ id: "casa", type: "cards", title: "Contas da casa", sub: `${s.casaResolved} de ${s.casaCount} resolvidas${s.casaCount ? ` · ${est.approximate ? "~" : ""}${fmt(est.value)} por mês` : ""}`, items: cc }];
+    const out = [{ id: "casa", type: "cards", title: "Contas da casa", sub: `${s.casaResolved} de ${s.casaCount} resolvidas${s.casaCount ? ` · ${est.approximate ? "~" : ""}${fmt(est.value)} por mês` : ""}`, items: cc }];
+    if (before) out.push(before);
+    return out;
   }
   const rowOf = (c) => ({ key: c.id, name: c.name, sub: c.rowSub, value: c.item.kind === "casa" && c.item.awaitingValue ? "Aguardando valor" : c.valueTxt, status: c.done ? "Pago" : c.item.awaitingValue ? "Aguardando valor" : c.chipTone === "warn" && c.chip ? c.chip : "Pendente", tone: c.done ? "lime" : c.item.awaitingValue || (c.chipTone === "warn" && c.chip) ? "warn" : "soft", openable: !c.done, item: c.item });
   const groups = [];
@@ -219,6 +237,7 @@ export function sectionsFor(tab, model) {
   const o = cards.filter((c) => c.item.kind === "compromisso");
   if (p.length) groups.push({ title: "Parcelamentos", sub: String(p.length), rows: p.map(rowOf) });
   if (h.length) groups.push({ title: "Contas da casa", sub: String(h.length), rows: h.map(rowOf) });
+  if (before) groups.push({ title: "Antes da próxima renda", sub: String(before.items.length), rows: before.items.map(rowOf) });
   if (o.length) groups.push({ title: "Compromissos", sub: String(o.length), rows: o.map(rowOf) });
   if (model.funded.length) groups.push({ title: "Guardado", sub: String(model.funded.length), rows: model.funded.map((f) => ({ key: f.id, name: f.description, sub: f.dueDate ? "Dinheiro separado" : "Sem prazo definido", value: fmt(f.amount), status: "Dinheiro separado", tone: "ink", openable: true, funded: f })) });
   return [{ id: "todos", type: "list", groups }];

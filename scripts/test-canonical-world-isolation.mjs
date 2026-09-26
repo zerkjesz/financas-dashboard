@@ -27,7 +27,8 @@ async function main() {
 
   const c = await prisma.confirmedCommitment.create({ data: { description: `${MARK} Devolver ao CNPJ`, amount: 777, dueDate: null, status: "FUNDED", fundedAt: NOW, settlementMode: "EXTERNAL_TRANSFER", shortLabel: "CNPJ" } });
   ids.commitment = c.id;
-  const r = await prisma.recurringRule.create({ data: { kind: "expense", isActive: true, name: `${MARK} Aluguel`, amount: 555, dayOfMonth: 28, category: "Moradia", amountKind: "FIXED" } });
+  const r = await prisma.recurringRule.create({ data: { kind: "expense", isActive: true, name: `${MARK} Aluguel`, amount: 555, dayOfMonth: 20, // vence antes da próxima renda (24/09) do relógio deste teste
+       category: "Moradia", amountKind: "FIXED" } });
   ids.rule = r.id;
 
   const ambient1 = await ambient();

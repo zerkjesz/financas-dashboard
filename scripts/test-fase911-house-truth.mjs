@@ -18,6 +18,7 @@ import { listUpcomingObligations } from "../lib/upcomingObligations.js";
 import { computeAccountBalance } from "../lib/accounts.js";
 import { performUndo } from "../lib/compromissosActions.js";
 import { DomainError } from "../lib/domainErrors.js";
+import { realizeSeptemberSalary } from "./lib/horizonFixture.js";
 
 const MARK = "TESTE_F911";
 let pass = 0, fail = 0;
@@ -64,6 +65,7 @@ async function cleanup() {
   await prisma.telegramCorrectionAudit.deleteMany({ where: { recordId: { in: bills.map((b) => b.id) } } }).catch(() => {});
   await prisma.telegramCorrectionAudit.deleteMany({ where: { model: "bill", rawMessage: "web", createdAt: { gte: START } } }).catch(() => {});
   await prisma.expense.deleteMany({ where: { OR: [{ description: { contains: MARK } }, { accountId: { in: created.accounts } }] } }).catch(() => {});
+  await prisma.income.deleteMany({ where: { description: { contains: MARK } } }).catch(() => {});
   await prisma.bill.deleteMany({ where: { recurringRuleId: { in: created.rules } } }).catch(() => {});
   await prisma.recurringRule.deleteMany({ where: { id: { in: created.rules } } }).catch(() => {});
   await prisma.balanceAdjustment.deleteMany({ where: { accountId: { in: created.accounts } } }).catch(() => {});
@@ -74,6 +76,9 @@ async function cleanup() {
 
 async function main() {
   const itau = await mkAccount("itau", "checking", 5000);
+  // Fase 9.1.2 — o horizonte é a PRÓXIMA RENDA; no DEV a de 24/09 está atrasada (=> horizonte = hoje). A fixture
+  // realiza a renda de setembro para que a próxima seja 24/10 (cenário canônico: hoje 25/09, renda 24/10).
+  await realizeSeptemberSalary(prisma, { mark: MARK, accountId: itau.id, now: NOW });
   const t0 = await truth();
 
   // ============ [1] Bill PENDING fixa reduz freeMoney / entra em comprometido
@@ -138,12 +143,13 @@ async function main() {
   check("[5] token com updatedAt errado → STALE e visita 2 continua paga", (await code(() => performUndo({ ...part2.undo, expectedUpdatedAt: "2020-01-01T00:00:00.000Z" }))) === "STALE" && (await prisma.bill.findUnique({ where: { id: part2.undo.id } })).status === "paid");
   await performUndo(part2.undo);
 
-  // ============ [6] só a competência CORRENTE entra (nada de competência futura projetada)
+  // ============ [6] horizonte (dueDate <= próxima renda), não competência
   const rent2 = await mkRule({ name: "Aluguel do mês seguinte", amount: 700, dayOfMonth: 5, amountKind: "FIXED" });
   const hOct = await getHouseBillObligations({ now: NOW, horizonEnd: new Date("2026-10-24T00:00:00.000Z") });
   const mine = (h) => h.items.filter((i) => i.description === `${MARK} Aluguel do mês seguinte`).map((i) => i.cycleMonth).sort();
-  check("[6] mesmo com horizonte até 24/10: só a competência corrente (2026-09) entra; o aluguel de 05/10 fica para quando outubro virar", mine(hOct).join() === "2026-09", mine(hOct).join());
-  check("[6] quando a competência vira (now em outubro), a de outubro passa a ser a corrente", (await getHouseBillObligations({ now: new Date("2026-10-02T15:00:00.000Z") })).items.filter((i) => i.description === `${MARK} Aluguel do mês seguinte`).map((i) => i.cycleMonth).join() === "2026-10");
+  check("[6] horizonte até 24/10: o aluguel de 05/10 (outra competência) ENTRA — competência ≠ horizonte", mine(hOct).join() === "2026-09,2026-10", mine(hOct).join());
+  const hSep = await getHouseBillObligations({ now: NOW, horizonEnd: new Date("2026-10-04T00:00:00.000Z") });
+  check("[6] próxima renda em 04/10 (antes do vencimento de 05/10): só a competência de setembro entra", hSep.items.filter((i) => i.description === `${MARK} Aluguel do mês seguinte`).map((i) => i.cycleMonth).join() === "2026-09");
   await prisma.recurringRule.update({ where: { id: rent2.id }, data: { isActive: false } });
 
   // ============ [7] simulador considera as contas da casa (mesma verdade do produto)
@@ -160,8 +166,8 @@ async function main() {
   check("[8] snapshot.houseBills expõe unpricedPendingBillsCount/unpricedPendingBills", snap.houseBills.unpricedPendingBillsCount >= 1 && snap.houseBills.unpricedPendingBills.some((b) => b.name === `${MARK} Energia B`));
   const home = await buildHomeModel({ now: NOW });
   check("[8] Home: hero.unpricedBills.count >= 1 com texto 'sem N conta(s) ainda sem valor'", home.hero.unpricedBills.count >= 1 && /ainda sem valor/.test(home.hero.unpricedBills.text) && home.hero.unpricedBills.names.includes(`${MARK} Energia B`));
-  const casaPart = home.hero.committedParts.find((p) => p.kind === "casa");
-  check("[8] Home: 'Contas da casa' aparece UMA vez em comprometido (agrupada), e cash − comprometido − protegido = livre", !!casaPart && home.hero.committedParts.filter((p) => p.kind === "casa").length === 1 && Math.abs(home.hero.cash - home.hero.committed - home.hero.protectedMoney - home.hero.free) < 0.02);
+  const casaPart = home.hero.committedParts.find((p) => p.kind === "casa" && p.label === "Contas da casa");
+  check("[8] Home: 'Contas da casa' (competência corrente) aparece UMA vez em comprometido (agrupada; as de outra competência têm linha própria), e cash − comprometido − protegido = livre", !!casaPart && home.hero.committedParts.filter((p) => p.label === "Contas da casa").length === 1 && Math.abs(home.hero.cash - home.hero.committed - home.hero.protectedMoney - home.hero.free) < 0.02);
   const tg = await handleReadIntent("read_free_money", { now: NOW });
   check("[8] Telegram: lista as contas da casa e avisa 'calculado sem N conta(s) ainda sem valor'", /calculado sem/.test(tg) && /Aluguel/.test(tg), tg.split("\n").slice(-2).join(" | "));
 
