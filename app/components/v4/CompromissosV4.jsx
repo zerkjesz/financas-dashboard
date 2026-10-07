@@ -114,7 +114,7 @@ export default function CompromissosV4() {
       </div>
     );
   }
-  if (!model) return <div className="n4" aria-busy="true" style={{ minHeight: 400 }}><div className="n4-head"><div><div className="n4-eyebrow">Compromissos</div><div className="n4-title">&nbsp;</div></div></div></div>;
+  if (!model) return <div className="n4" aria-busy="true" style={{ minHeight: 400 }}><div className="n4-head"><div><div className="n4-eyebrow">Compromissos · ciclo atual</div><div className="n4-title">&nbsp;</div></div></div></div>;
 
   const s = model.summary;
   const sections = sectionsFor(tab, model);
@@ -129,17 +129,17 @@ export default function CompromissosV4() {
       <div className="n4-rise">
         <div className="n4-head">
           <div>
-            <div className="n4-eyebrow">Compromissos</div>
-            <h1 className="n4-title" style={{ margin: 0, marginTop: 8 }}>{model.monthLong}</h1>
+            <div className="n4-eyebrow">Compromissos · ciclo atual</div>
+            <h1 className="n4-title" style={{ margin: 0, marginTop: 8 }}>{model.cycle?.label ?? model.monthLong}</h1>
           </div>
           <SoundToggle soundOn={audio.soundOn} onToggle={audio.toggleSound} />
         </div>
 
         {/* resumo do mês (escuro) */}
-        <section className="n4-hero is-left" aria-label="Resumo do mês" style={{ padding: "32px 36px" }}>
+        <section className="n4-hero is-left" aria-label="Resumo do ciclo" style={{ padding: "32px 36px" }}>
           <div className="n4-hero-top" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(280px, 100%), 1fr))", gap: "28px 40px" }}>
             <div>
-              <div className="n4-mono n4-hero-label" style={{ letterSpacing: "0.15em", fontSize: 10.5 }}>Resolvidos este mês</div>
+              <div className="n4-mono n4-hero-label" style={{ letterSpacing: "0.15em", fontSize: 10.5 }}>Resolvidos no ciclo</div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginTop: 10 }}>
                 <div className="n4-tab" style={{ fontSize: "clamp(52px,6vw,72px)", fontWeight: 300, letterSpacing: "-0.05em", lineHeight: 1 }}>{s.resolved}</div>
                 <div style={{ fontSize: 22, color: "rgba(255,255,255,0.66)" }}>de {s.total}</div>

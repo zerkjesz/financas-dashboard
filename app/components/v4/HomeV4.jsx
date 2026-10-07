@@ -172,7 +172,7 @@ export default function HomeV4() {
 
           <div className="n4-col">
             <section className="n4-card roomy" aria-labelledby="n4-comp">
-              <div className="n4-mono n4-hide-compact" style={{ color: "#6e747b", letterSpacing: "0.13em" }} id="n4-comp">Compromissos de {m.compromissos.monthLong.toLowerCase()}</div>
+              <div className="n4-mono n4-hide-compact" style={{ color: "#6e747b", letterSpacing: "0.13em" }} id="n4-comp">Compromissos do ciclo · {m.compromissos.cycleLabel ?? m.compromissos.monthLong.toLowerCase()}</div>
               <div className="n4-row-head n4-only-compact"><div className="n4-card-title">Compromissos</div><div style={{ fontSize: 13, color: "#565c63" }}>{m.compromissos.resolved} de {m.compromissos.total}</div></div>
               <div className="n4-hide-compact" style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 8 }}>
                 <div className="n4-bigfig">{m.compromissos.resolved}</div>

@@ -199,7 +199,7 @@ async function run() {
     // arquivo, agora desatualizada nesse ponto específico). Captura o
     // background de CURRENT_HORIZON_OBLIGATION ANTES de criar as fixtures
     // desta seção, mesmo padrão já usado pra "backgroundIncurred" mais abaixo.
-    const backgroundCurrentHorizonBefore = await getCurrentHorizonObligations({ nextIncomeDate: NEXT_INCOME_DATE });
+    const backgroundCurrentHorizonBefore = await getCurrentHorizonObligations({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE });
 
     const checking = await mkAccount("cs-checking", "checking", 10000);
     const va = await mkAccount("cs-va", "food_voucher", 600);
@@ -304,7 +304,7 @@ async function run() {
     // 4a) ConfirmedCommitment SETTLED + Expense
     const commitment = await createCommitment({ description: `[${MARK}] DC Commitment`, amount: 800, dueDate: new Date("2026-09-10T00:00:00.000Z") });
     created.commitments.push(commitment.id);
-    const beforeCH = await getCurrentHorizonObligations({ nextIncomeDate: NEXT_INCOME_DATE });
+    const beforeCH = await getCurrentHorizonObligations({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE });
     const hasBeforeSettle = beforeCH.items.some((i) => i.id === commitment.id);
     check("DC: commitment CONFIRMED antes de settled conta em currentHorizon", hasBeforeSettle);
 
@@ -312,7 +312,7 @@ async function run() {
     const { commitment: settled, expense } = await settleCommitmentCreatingExpense(commitment.id, { accountId: checking.id, description: `[${MARK}] DC settlement` });
     created.expenses.push(expense.id);
     const balanceAfter = (await accountsFor([checking.id]))[0].balance;
-    const afterCH = await getCurrentHorizonObligations({ nextIncomeDate: NEXT_INCOME_DATE });
+    const afterCH = await getCurrentHorizonObligations({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE });
     const hasAfterSettle = afterCH.items.some((i) => i.id === commitment.id);
     check("DC: commitment SETTLED não aparece mais em currentHorizon", !hasAfterSettle);
     check("DC: settlement debita a conta em exatamente 800 (Expense real)", eq(addMoney(balanceBefore, balanceAfter.negated()), 800), serializeMoney(addMoney(balanceBefore, balanceAfter.negated())).toString());
@@ -335,13 +335,13 @@ async function run() {
     });
     created.externalInstallmentPlans.push(plan.id);
     const installment = await prisma.externalInstallment.create({ data: { planId: plan.id, number: 1, amount: 150, dueDate: new Date("2026-09-05T00:00:00.000Z") } });
-    const beforePaidCH = await getCurrentHorizonObligations({ nextIncomeDate: NEXT_INCOME_DATE });
+    const beforePaidCH = await getCurrentHorizonObligations({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE });
     check("DC: ExternalInstallment PENDING conta em currentHorizon antes de paga", beforePaidCH.items.some((i) => i.id === installment.id));
 
     const linkedExpense = await prisma.expense.create({ data: { amount: 150, description: `[${MARK}] DC expense installment`, category: "Outros", accountId: checking.id, source: "manual" } });
     created.expenses.push(linkedExpense.id);
     await markExternalInstallmentPaid(installment.id, { expenseId: linkedExpense.id });
-    const afterPaidCH = await getCurrentHorizonObligations({ nextIncomeDate: NEXT_INCOME_DATE });
+    const afterPaidCH = await getCurrentHorizonObligations({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE });
     check("DC: ExternalInstallment PAID não conta mais em currentHorizon", !afterPaidCH.items.some((i) => i.id === installment.id));
 
     // 4c) Bill PAID + Expense (markBillPaid já cria o Expense)
@@ -349,11 +349,11 @@ async function run() {
       data: { description: `[${MARK}] DC Bill`, amount: 250, category: "Outros", accountId: checking.id, dueDate: new Date("2026-09-08T00:00:00.000Z"), status: "pending", source: "manual" },
     });
     created.bills.push(billToPay.id);
-    const beforeBillCH = await getCurrentHorizonObligations({ nextIncomeDate: NEXT_INCOME_DATE });
+    const beforeBillCH = await getCurrentHorizonObligations({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE });
     check("DC: Bill pending conta em currentHorizon antes de paga", beforeBillCH.items.some((i) => i.id === billToPay.id));
     const { expense: billExpense } = await markBillPaid(billToPay.id, { accountId: checking.id });
     created.expenses.push(billExpense.id);
-    const afterBillCH = await getCurrentHorizonObligations({ nextIncomeDate: NEXT_INCOME_DATE });
+    const afterBillCH = await getCurrentHorizonObligations({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE });
     check("DC: Bill PAID não conta mais em currentHorizon (markBillPaid já cria o Expense)", !afterBillCH.items.some((i) => i.id === billToPay.id));
   }
 
@@ -363,7 +363,7 @@ async function run() {
   {
     // Fase 5.2C — background de CURRENT_HORIZON_OBLIGATION capturado ANTES de
     // criar o commitment desta seção (mesmo motivo da seção 3 acima).
-    const backgroundCurrentHorizonRF = await getCurrentHorizonObligations({ nextIncomeDate: NEXT_INCOME_DATE });
+    const backgroundCurrentHorizonRF = await getCurrentHorizonObligations({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE });
 
     const checking = await mkAccount("rf-checking", "checking", 8730);
     const reserve = await createReserve({ accountId: checking.id, name: `[${MARK}] Reserva RF` });
@@ -412,7 +412,7 @@ async function run() {
     // commitment ainda é FUTURE_OBLIGATION, não contribui pra currentHorizon
     // ainda — então isto é puramente o background real, sem contaminação
     // circular do nosso próprio fixture).
-    const backgroundCurrentHorizonFA = await getCurrentHorizonObligations({ nextIncomeDate: NEXT_INCOME_DATE });
+    const backgroundCurrentHorizonFA = await getCurrentHorizonObligations({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE });
     const accounts = await accountsFor([checking.id]);
 
     const beforeFunding = await computeFreeMoney({ now: NOW, nextIncomeDate: NEXT_INCOME_DATE, accounts });

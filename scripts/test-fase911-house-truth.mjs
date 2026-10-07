@@ -30,7 +30,7 @@ const near = (a, b) => Math.abs(n(a) - n(b)) < 0.005;
 async function code(fn) { try { await fn(); return null; } catch (e) { return e instanceof DomainError ? e.code : `RAW:${String(e.message).split("\n").pop().slice(0, 80)}`; } }
 
 const NOW = new Date("2026-09-25T15:00:00.000Z");
-const MONTH = "2026-09";
+const MONTH = "2026-10"; // Fase 10.2: competência do ciclo em 25/09 (24/09→23/10)
 const created = { accounts: [], rules: [] };
 const START = new Date();
 
@@ -82,7 +82,7 @@ async function main() {
   const t0 = await truth();
 
   // ============ [1] Bill PENDING fixa reduz freeMoney / entra em comprometido
-  const aluguel = await mkRule({ name: "Aluguel", amount: 1000, dayOfMonth: 28, amountKind: "FIXED" });
+  const aluguel = await mkRule({ name: "Aluguel", amount: 1000, dayOfMonth: 5, amountKind: "FIXED" });
   const t1 = await truth();
   check("[1] aluguel pendente R$1.000: comprometido (currentHorizon) +1000", near(t1.horizon - t0.horizon, 1000), String(t1.horizon - t0.horizon));
   check("[1] aluguel pendente: freeMoney −1000 e caixa inalterado (nada pago)", near(t1.free - t0.free, -1000) && near(t1.cash, t0.cash));
@@ -147,9 +147,9 @@ async function main() {
   const rent2 = await mkRule({ name: "Aluguel do mês seguinte", amount: 700, dayOfMonth: 5, amountKind: "FIXED" });
   const hOct = await getHouseBillObligations({ now: NOW, horizonEnd: new Date("2026-10-24T00:00:00.000Z") });
   const mine = (h) => h.items.filter((i) => i.description === `${MARK} Aluguel do mês seguinte`).map((i) => i.cycleMonth).sort();
-  check("[6] horizonte até 24/10: o aluguel de 05/10 (outra competência) ENTRA — competência ≠ horizonte", mine(hOct).join() === "2026-09,2026-10", mine(hOct).join());
+  check("[6] horizonte até 24/10: o aluguel de 05/10 (outra competência) ENTRA — competência ≠ horizonte", mine(hOct).join() === "2026-10", mine(hOct).join());
   const hSep = await getHouseBillObligations({ now: NOW, horizonEnd: new Date("2026-10-04T00:00:00.000Z") });
-  check("[6] próxima renda em 04/10 (antes do vencimento de 05/10): só a competência de setembro entra", hSep.items.filter((i) => i.description === `${MARK} Aluguel do mês seguinte`).map((i) => i.cycleMonth).join() === "2026-09");
+  check("[6] próxima renda em 04/10 (antes do vencimento de 05/10): nenhuma ocorrência entra (vencimento 05/10 > renda)", hSep.items.filter((i) => i.description === `${MARK} Aluguel do mês seguinte`).length === 0);
   await prisma.recurringRule.update({ where: { id: rent2.id }, data: { isActive: false } });
 
   // ============ [7] simulador considera as contas da casa (mesma verdade do produto)

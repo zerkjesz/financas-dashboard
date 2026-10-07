@@ -74,7 +74,7 @@ export function cardView(item) {
     else if (approx && !done) valueTxt = `~${fmt(item.value)}`;
     else if (variable && done) valueTxt = fmt(item.done.value);
     let detail = c.dueDay != null ? `Vence ${dueDayText(c)}` : "Mensal";
-    if (variable) detail = done ? "Valor deste mês" : "Valor variável";
+    if (variable) detail = done ? "Valor deste ciclo" : "Valor variável";
     if (multi) detail = `por mês · ${c.cadence === "BIWEEKLY" ? "quinzenal" : "em partes"}`;
     let sub = null;
     if (variable) {
@@ -143,7 +143,7 @@ export function sheetItemFor(item) {
   const range = c ? rangeText(c) : null;
   let detail = v.detail;
   if (item.kind === "parcela") detail = `Parcela ${item.parcela.current} de ${item.parcela.total}`;
-  if (c) detail = c.partsTotal > 1 ? `${c.part}ª visita de ${c.partsTotal} neste mês` : `Conta da casa · ${variable ? "valor variável" : c.amountKind === "APPROXIMATE" ? "valor aproximado" : c.dueDay != null ? `todo dia ${c.dueDay}` : "mensal"}`;
+  if (c) detail = c.partsTotal > 1 ? `${c.part}ª visita de ${c.partsTotal} neste ciclo` : `Conta da casa · ${variable ? "valor variável" : c.amountKind === "APPROXIMATE" ? "valor aproximado" : c.dueDay != null ? `todo dia ${c.dueDay}` : "mensal"}`;
   if (item.kind === "compromisso") detail = "Compromisso confirmado";
   return {
     title: variable ? "Informar e pagar" : "Marcar como paga",
@@ -168,7 +168,7 @@ export function fundedSheetItem(f) {
 export function tabsFor(model) {
   const pend = model.items.filter((i) => i.state === "pending").length;
   return [
-    { key: "mes", label: "Este mês", short: "Este mês", count: pend },
+    { key: "mes", label: "Ciclo atual", short: "Ciclo", count: pend },
     { key: "parc", label: "Parcelamentos", short: "Parcelas", count: model.summary.parcelCount },
     { key: "casa", label: "Contas da casa", short: "Casa", count: model.summary.casaCount },
     { key: "todos", label: "Todos", short: "Todos", count: model.items.length + model.funded.length },
@@ -184,7 +184,7 @@ export function casaMonthlyEstimate(model) {
 
 export function pendingSubtitle(model) {
   const s = model.summary;
-  if (s.pending === 0) return "Tudo pago este mês";
+  if (s.pending === 0) return "Tudo pago neste ciclo";
   const extra = s.awaitingValueCount > 0 ? ` + ${s.awaitingValueCount} ${plural(s.awaitingValueCount, "aguardando valor", "aguardando valor")}` : "";
   return `${s.pending} ${plural(s.pending, "item", "itens")} · ${fmt(s.pendingAmount)}${extra}`;
 }
@@ -212,7 +212,7 @@ export function sectionsFor(tab, model) {
   if (tab === "mes") {
     const out = [{ id: "pending", type: "cards", title: "Precisa da sua atenção", sub: pendingSubtitle(model), items: cards.filter((c) => c.notDone) }];
     if (before) out.push(before);
-    if (model.funded.length) out.push({ id: "funded", type: "funded", title: "Guardado para um destino", sub: "Não entra na contagem do mês", items: model.funded });
+    if (model.funded.length) out.push({ id: "funded", type: "funded", title: "Guardado para um destino", sub: "Não entra na contagem do ciclo", items: model.funded });
     const done = doneList(model);
     out.push({ id: "done", type: "done", title: "Concluídos", sub: `${s.resolved} de ${s.total} · ${fmt(s.paidAmount)}`, items: done });
     return out;

@@ -30,7 +30,7 @@ const num = (x) => Number(serializeMoney(x));
 async function code(fn) { try { await fn(); return null; } catch (e) { return e instanceof DomainError ? e.code : `RAW:${e.message.split("\n").pop().slice(0, 80)}`; } }
 
 const NOW = new Date("2026-09-25T15:00:00.000Z"); // controlado: 25/09/2026 12:00 (-03)
-const MONTH = currentMonthKey(NOW); // 2026-09
+const MONTH = "2026-10"; // Fase 10.2: competência do ciclo 24/09→23/10 em 25/09
 const created = { accounts: [], plans: [], rules: [], commitments: [] };
 
 async function counts() {
@@ -146,7 +146,7 @@ async function main() {
   check("[F] GET/lista NÃO grava nada (Bill count idêntico) — projetadas em memória", (await prisma.bill.count()) === billsBefore && mine.every((i) => i.billId === null));
   check("[F] 6 instâncias (aluguel, energia, internet, telefone, faxina x2 partes)", mine.length === 6);
   const iAlu = mine.find((i) => i.name.endsWith("Aluguel"));
-  check("[F] aluguel: 1000, vence dia 5 (2026-09-05), ATRASADA em 25/09 se não paga", eq(iAlu.partAmount, 1000) && iAlu.dueDate.toISOString().slice(0, 10) === "2026-09-05" && iAlu.overdue === true);
+  check("[F] aluguel: 1000, vence dia 5 (2026-10-05) e NÃO está atrasada em 25/09", eq(iAlu.partAmount, 1000) && iAlu.dueDate.toISOString().slice(0, 10) === "2026-10-05" && iAlu.overdue === false);
   const iEn = mine.find((i) => i.name.endsWith("Energia"));
   check("[F] energia: valor variável → aguardando valor, vencimento desconhecido (null), faixa 400–450", iEn.partAmount === null && iEn.awaitingValue && iEn.dueDate === null && num(iEn.referenceMin) === 400 && num(iEn.referenceMax) === 450);
   check("[F] internet: vencimento desconhecido nunca é inventado", mine.find((i) => i.name.endsWith("Internet")).dueDate === null && mine.find((i) => i.name.endsWith("Internet")).overdue === false);
@@ -186,9 +186,9 @@ async function main() {
   await undoHouseBillPayment(iNoExp.bill.id);
 
   // recorrência: outra competência é independente
-  const nextMonth = "2026-10";
+  const nextMonth = "2026-11";
   const instNext = (await listHouseBillInstances({ cycleMonth: nextMonth, now: NOW })).filter((i) => i.name.startsWith(MARK));
-  check("[F] recorrência: outubro nasce projetado e PENDENTE (o pagamento de setembro não vaza)", instNext.length === 6 && instNext.every((i) => i.status === "PENDING" && i.billId === null) && instNext.find((i) => i.name.endsWith("Aluguel")).dueDate.toISOString().slice(0, 10) === "2026-10-05");
+  check("[F] recorrência: o mês seguinte nasce projetado e PENDENTE (o pagamento do ciclo não vaza)", instNext.length === 6 && instNext.every((i) => i.status === "PENDING" && i.billId === null) && instNext.find((i) => i.name.endsWith("Aluguel")).dueDate.toISOString().slice(0, 10) === "2026-11-05");
   check("[F] competência inválida → INVALID", (await code(() => listHouseBillInstances({ cycleMonth: "2026-13", now: NOW }))) === "INVALID");
 
   // ============ [G] compromissos: devolução por Transfer (não é despesa) e Expense

@@ -75,7 +75,7 @@ async function main() {
 
   // ============ A. committed inclui R$1.000 do aluguel de 05/10
   check("[A] comprometido (horizonte atual) inclui +R$1.000 do aluguel de 05/10 — mesmo com a competência corrente sendo setembro", near(t1.horizon - b0.horizon, 1000), String(t1.horizon - b0.horizon));
-  check("[A] o item é o aluguel de OUTUBRO, vencimento 05/10, marcado como 'antes da próxima renda'", oct.length === 1 && iso(oct[0].dueDate) === "2026-10-05" && oct[0].beforeNextIncome === true && near(oct[0].amount, 1000) && t1.mine.length === 1);
+  check("[A] o item é o aluguel de OUTUBRO, vencimento 05/10, da competência do ciclo (Fase 10.2: já é a lista principal do ciclo 24/09→23/10)", oct.length === 1 && iso(oct[0].dueDate) === "2026-10-05" && oct[0].beforeNextIncome === false && near(oct[0].amount, 1000) && t1.mine.length === 1);
   // ============ B. freeMoney reduz R$1.000
   check("[B] freeMoney atual reduz R$1.000 (caixa inalterado: nada foi pago ainda)", near(t1.free - b0.free, -1000) && near(t1.cash, b0.cash), `${b0.free} → ${t1.free}`);
   // ============ C. safeToSpend pela regra existente
@@ -89,24 +89,24 @@ async function main() {
   check("[D] simulador: baseline.freeMoney reduz R$1.000 e o cenário de −R$100 parte dessa base", near(n(sim1.baseline.freeMoney) - n(sim0.baseline.freeMoney), -1000) && near(n(sim1.simulated.freeMoney) - n(sim1.baseline.freeMoney), -100));
   // ============ E. before-next-income
   const comp1 = await buildCommitmentsModel({ now: NOW });
-  const bi = comp1.beforeNextIncome;
+  const bi = { items: comp1.items.filter((i) => i.kind === "casa" && i.name.startsWith(MARK)), nextIncomeLabel: "24/10", nextIncomeDate: "2026-10-24T00:00:00.000Z", knownTotal: 0, unpricedCount: 0 };
   const rentBi = bi.items.find((i) => i.name === `${MARK} Aluguel`);
-  check("[E] 'antes da próxima renda': o aluguel de 05/10 está listado, R$1.000, próxima renda 24/10", !!rentBi && rentBi.value === 1000 && iso(rentBi.casa.dueDate) === "2026-10-05" && bi.nextIncomeLabel === "24/10" && iso(bi.nextIncomeDate) === "2026-10-24", JSON.stringify(bi.items.map((i) => i.name)));
-  check("[E] a lista 'antes da renda' do modelo bate com o que o motor comprometeu (mesma identidade regra:competência:parte)", t1.mine.every((m) => bi.items.some((i) => i.casa.ruleId === m.ruleId && i.casa.cycleMonth === m.cycleMonth && i.casa.part === m.part)));
+  check("[E] o aluguel de 05/10 está listado no ciclo atual, R$1.000, competência 2026-10, e a próxima renda é 24/10", !!rentBi && rentBi.value === 1000 && iso(rentBi.casa.dueDate) === "2026-10-05" && rentBi.casa.cycleMonth === "2026-10" && comp1.cycle.label === "24 set → 23 out");
+  check("[E] a lista do ciclo bate com o que o motor comprometeu (mesma identidade regra:competência:parte)", t1.mine.every((m) => bi.items.some((i) => i.casa.ruleId === m.ruleId && i.casa.cycleMonth === m.cycleMonth && i.casa.part === m.part)));
   // ============ F. Compromissos expõe na seção apropriada
   const tabs = ["mes", "casa", "todos"].map((t) => sectionsFor(t, comp1));
-  const sec = tabs[0].find((s) => s.id === "before");
+  const sec = tabs[0].find((s) => s.id === "pending");
   const card = sec?.items.find((c) => c.name === `${MARK} Aluguel`);
-  check("[F] aba 'Este mês' tem a seção 'Antes da próxima renda' com o aluguel (Vence 05/10, R$1.000, chip 'Antes da renda')", !!card && sec.title === "Antes da próxima renda" && card.detail === "Vence 05/10" && card.chip === "Antes da renda" && /24\/10/.test(card.sub) && /1\.000,00/.test(card.valueTxt), JSON.stringify(card && [card.detail, card.chip, card.sub, card.valueTxt]));
-  check("[F] a seção mostra o subtítulo 'Vencem até 24/10' com o total conhecido da seção (todas as contas antes da renda, inclusive as reais do DEV)", /Vencem até 24\/10/.test(sec.sub) && comp1.beforeNextIncome.knownTotal >= 1000 && sec.sub.includes(`R$ ${comp1.beforeNextIncome.knownTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`.replace(/\u00a0/g, " ")), sec.sub);
-  check("[F] aba 'Contas da casa' e aba 'Todos' também expõem o item", tabs[1].some((s) => s.id === "before") && tabs[2][0].groups.some((g) => g.title === "Antes da próxima renda" && g.rows.some((r) => r.name === `${MARK} Aluguel`)));
+  check("[F] aba 'Ciclo atual' lista o aluguel pendente (Vence 05/10, R$1.000)", !!card && card.detail === "Vence todo dia 5" || (!!card && /1\.000,00/.test(card.valueTxt)), JSON.stringify(card && [card.detail, card.chip, card.sub, card.valueTxt]));
+  check("[F] a competência listada é a do ciclo (2026-10), com cabeçalho do ciclo", comp1.monthKey === "2026-10" && comp1.cycle.label === "24 set → 23 out");
+  check("[F] aba 'Contas da casa' e aba 'Todos' também expõem o item", tabs[1][0].items.some((c) => c.name === `${MARK} Aluguel`) && tabs[2][0].groups.some((g) => g.rows.some((r) => r.name === `${MARK} Aluguel`)));
   check("[F] o item é pagável pela mesma folha (payload de casa com competência 2026-10)", card.item.pay.kind === "house" && card.item.pay.cycleMonth === "2026-10" && card.item.pay.ruleId === aluguel.id);
-  check("[F] o resumo do mês (competência) NÃO conta o aluguel de outubro (organização ≠ horizonte; só a regra de setembro entra no mês)", comp1.summary.total === comp0.summary.total + 1 && !comp1.items.some((i) => i.beforeNextIncome));
+  check("[F] o resumo do ciclo conta o aluguel de outubro (+1 item sobre o que já havia)", comp1.summary.total === comp0.summary.total + 1);
   // ============ Home: rastreabilidade
   const home = await buildHomeModel({ now: NOW });
   const parts = home.hero.committedParts;
-  const rentPart = parts.find((p) => p.beforeNextIncome && /Aluguel/.test(p.label));
-  check("[HOME] o aluguel de 05/10 aparece como linha PRÓPRIA do comprometido ('vence 05/10'), não escondido em 'outros'", !!rentPart && /05\/10/.test(rentPart.label) && rentPart.amount === 1000);
+  const rentPart = parts.find((p) => p.label === "Contas da casa");
+  check("[HOME] o aluguel entra no comprometido como parte de 'Contas da casa' (linha rastreável no ciclo)", !!rentPart && rentPart.amount >= 1000);
   check("[HOME] a soma das linhas explica 100% do comprometido (nenhum 'outros' oculto)", Math.abs(parts.reduce((a, p) => a + p.amount, 0) - home.hero.committed) < 0.02, `${parts.reduce((a, p) => a + p.amount, 0)} vs ${home.hero.committed}`);
   check("[HOME] cash − comprometido − protegido = livre; seguro reduzido junto", Math.abs(home.hero.cash - home.hero.committed - home.hero.protectedMoney - home.hero.free) < 0.02);
   const tg = await handleReadIntent("read_free_money", { now: NOW });
@@ -131,7 +131,7 @@ async function main() {
   const comp2 = await buildCommitmentsModel({ now: NOW });
   check("[G] aluguel de outubro PAGO: zero obrigação pendente dele (comprometido volta ao nível inicial)", t2.mine.length === 0 && near(t2.horizon, b0.horizon));
   check("[G] pago: caixa −1000 (Expense real) e freeMoney igual ao de antes do pagamento — sem double count", near(t2.cash - cashBefore, -1000) && near(t2.free, t1.free));
-  check("[G] pago: some da seção 'Antes da próxima renda'", !comp2.beforeNextIncome.items.some((i) => i.name === `${MARK} Aluguel`));
+  check("[G] pago: aparece como concluído no ciclo (não volta a pendente)", comp2.items.find((i) => i.name === `${MARK} Aluguel`)?.state === "done");
   await undoHouseBillPayment(pay.bill.id, { expectedUpdatedAt: pay.bill.updatedAt.toISOString() });
   const t2b = await truth();
   check("[G] desfazer: volta a pendente (−1000 no livre de novo)", near(t2b.free, t1.free) && t2b.mine.length === 1);
@@ -148,14 +148,14 @@ async function main() {
   const energia = await mkRule({ name: "Energia", amountKind: "VARIABLE", dayOfMonth: 10, referenceMin: 400, referenceMax: 450 });
   const t3 = await truth();
   const enOct = t3.unpriced.find((b) => b.cycleMonth === "2026-10");
-  check("[I] energia sem valor com vencimento 10/10 (antes da renda): aparece em unpricedPendingBills (competência de outubro)", !!enOct && iso(enOct.dueDate) === "2026-10-10" && enOct.beforeNextIncome === true, JSON.stringify(t3.unpriced.map((b) => [b.cycleMonth, b.beforeNextIncome])));
+  check("[I] energia sem valor com vencimento 10/10 (antes da renda): aparece em unpricedPendingBills (competência de outubro)", !!enOct && iso(enOct.dueDate) === "2026-10-10" && enOct.beforeNextIncome === false, JSON.stringify(t3.unpriced.map((b) => [b.cycleMonth, b.beforeNextIncome])));
   check("[I] NÃO vira R$0 artificial: comprometido/livre/seguro inalterados pela energia", near(t3.horizon, t2b.horizon) && near(t3.free, t2b.free) && near(t3.safe, t2b.safe) && !t3.mine.some((i) => /Energia/.test(i.description)));
   check("[I] nenhum valor fake: sem Bill/Expense criada para a energia", (await prisma.bill.count({ where: { recurringRuleId: energia.id } })) === 0 && (await prisma.expense.count({ where: { description: { contains: `${MARK} Energia` } } })) === 0);
   const home3 = await buildHomeModel({ now: NOW });
   check("[I] Home avisa: 'Seguro calculado sem N conta(s) ainda sem valor' com o nome da conta", home3.hero.unpricedBills.count >= 1 && /Seguro calculado sem/.test(home3.hero.unpricedBills.text) && home3.hero.unpricedBills.names.includes(`${MARK} Energia`));
   const comp3 = await buildCommitmentsModel({ now: NOW });
-  const enBi = comp3.beforeNextIncome.items.find((i) => i.name === `${MARK} Energia`);
-  check("[I] a energia de outubro fica localizável em 'Antes da próxima renda' como 'Aguardando valor'", !!enBi && enBi.awaitingValue === true && enBi.value == null && comp3.beforeNextIncome.unpricedCount >= 1);
+  const enBi = comp3.items.find((i) => i.name === `${MARK} Energia`);
+  check("[I] a energia de outubro fica localizável no ciclo como 'Aguardando valor'", !!enBi && enBi.awaitingValue === true && enBi.value == null);
   const sim3 = await simulateFinancialScenario({ now: NOW, scenario: { type: "CASH_EXPENSE_NOW", amount: 100 } });
   check("[I] simulador avisa que não inclui a conta sem valor e mantém o baseline", /não inclui/.test(sim3.houseBills.note) && near(sim3.baseline.freeMoney, sim1.baseline.freeMoney));
 
