@@ -354,7 +354,7 @@ async function main() {
   // I) XLSX SANITY (leitor independente) + NO_SECRET_SCAN (itens 21/22).
   // ==========================================================================
   {
-    const exportRes = await fetch(`${BASE_URL}/api/data/export`, { headers: { Cookie: sessionCookie } });
+    const exportRes = await fetch(`${BASE_URL}/api/data/export?preset=all_time`, { headers: { Cookie: sessionCookie } }); // Fase 10.3: o padrão sem parâmetro agora é o Ciclo atual; este check precisa de linhas reais de qualquer época
     check("[I] export real -> 200", exportRes.status === 200, `status=${exportRes.status}`);
     const arrayBuffer = await exportRes.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);

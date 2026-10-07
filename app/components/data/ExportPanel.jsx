@@ -4,29 +4,115 @@ import { useEffect, useState } from "react";
 import { Download, Sheet, Check } from "lucide-react";
 import Button from "../ui/Button.jsx";
 
-const PERIOD_LABEL = { all: "Todo o histórico", last12months: "Últimos 12 meses", thisyear: "Este ano" };
+// Fase 10.3 — período explícito e SEMPRE visível. Os presets são os mesmos de lib/dataHub/range.js (a resolução das datas é
+// feita no servidor, com o ciclo 24→23 da Fase 10.2); aqui só se escolhe e se mostra o range resolvido.
+const PRESETS = [
+  { key: "current_cycle", label: "Ciclo atual" },
+  { key: "previous_cycle", label: "Ciclo anterior" },
+  { key: "last_30_days", label: "Últimos 30 dias" },
+  { key: "last_90_days", label: "Últimos 90 dias" },
+  { key: "this_year", label: "Este ano" },
+  { key: "since_norte_start", label: "Desde o início do Norte" },
+  { key: "all_time", label: "Período todo" },
+  { key: "custom", label: "Personalizado" },
+];
+const PRESET_KEYS = PRESETS.map((p) => p.key);
+const DEFAULT_PRESET = "current_cycle";
+const STORAGE_KEY = "norte.dataHub.exportPreset";
+const BR_DATE = /^\d{2}\/\d{2}\/\d{4}$/;
 
-// Fase 6.0 (Design Freeze) — "Levar uma cópia" (Exportar). O hero e o
-// contador de linhas/tamanho são REAIS (rowCount/sheetCount vêm do próprio
-// download; a lista de sheets e contagem por aba vêm de /api/data/sheets) —
-// nunca o nome/tamanho mock do protótipo ("norte-dados-set-2026.xlsx",
-// "1,9 MB" fixos).
+function readStoredPreset() {
+  try {
+    const v = window.localStorage.getItem(STORAGE_KEY);
+    return PRESET_KEYS.includes(v) && v !== "custom" ? v : DEFAULT_PRESET;
+  } catch {
+    return DEFAULT_PRESET;
+  }
+}
+
+// Máscara DD/MM/AAAA enquanto digita.
+function maskDate(v) {
+  const d = v.replace(/\D/g, "").slice(0, 8);
+  if (d.length > 4) return `${d.slice(0, 2)}/${d.slice(2, 4)}/${d.slice(4)}`;
+  if (d.length > 2) return `${d.slice(0, 2)}/${d.slice(2)}`;
+  return d;
+}
+
+// Fase 6.0 (Design Freeze) — "Levar uma cópia" (Exportar). O hero e o contador de linhas/tamanho são REAIS (rowCount/sheetCount
+// vêm do próprio download; a lista de abas e a contagem por aba vêm de /api/data/export/preview, que é somente leitura).
 export default function ExportPanel() {
-  const [sheets, setSheets] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [previewError, setPreviewError] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null); // null = todas
-  const [period, setPeriod] = useState("all");
+  const [preset, setPreset] = useState(DEFAULT_PRESET);
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
   const [custom, setCustom] = useState(false);
   const [state, setState] = useState("idle"); // idle | exportando | pronto
   const [lastResult, setLastResult] = useState(null);
+  const sheets = preview?.sheets ?? null;
 
   useEffect(() => {
-    fetch(`/api/data/sheets?period=${period}`)
-      .then((r) => r.json())
+    setPreset(readStoredPreset());
+  }, []);
+
+  // no celular a fileira de chips rola na horizontal: mantém o preset escolhido à vista
+  useEffect(() => {
+    document.querySelector(`[data-preset="${preset}"]`)?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [preset]);
+
+  function choosePreset(key) {
+    setPreset(key);
+    setState((st) => (st === "pronto" ? "idle" : st));
+    if (key !== "custom") {
+      try {
+        window.localStorage.setItem(STORAGE_KEY, key);
+      } catch {}
+    }
+  }
+
+  const customReady = preset !== "custom" || (BR_DATE.test(customFrom) && BR_DATE.test(customTo));
+
+  function rangeQuery() {
+    const params = new URLSearchParams({ preset });
+    if (preset === "custom") {
+      params.set("dateFrom", customFrom);
+      params.set("dateTo", customTo);
+    }
+    return params;
+  }
+
+  useEffect(() => {
+    if (!customReady) {
+      setPreview(null);
+      setPreviewError(preset === "custom" && (customFrom || customTo) ? "Informe as duas datas no formato DD/MM/AAAA." : null);
+      setLoading(false);
+      return undefined;
+    }
+    const ctrl = new AbortController();
+    setLoading(true);
+    setPreviewError(null);
+    fetch(`/api/data/export/preview?${rangeQuery().toString()}`, { signal: ctrl.signal })
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.message || "Não foi possível calcular o período.");
+        return d;
+      })
       .then((d) => {
-        setSheets(d.sheets);
+        setPreview(d);
         setSelected((prev) => prev ?? d.sheets.map((s) => s.key));
+        setLoading(false);
+      })
+      .catch((e) => {
+        if (e.name === "AbortError") return;
+        setPreview(null);
+        setPreviewError(e.message);
+        setLoading(false);
       });
-  }, [period]);
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset, customFrom, customTo, customReady]);
 
   function toggleSheet(key) {
     setSelected((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
@@ -34,7 +120,7 @@ export default function ExportPanel() {
 
   async function runExport() {
     setState("exportando");
-    const params = new URLSearchParams({ period });
+    const params = rangeQuery();
     if (selected && sheets && selected.length < sheets.length) params.set("sheets", selected.join(","));
     try {
       const res = await fetch(`/api/data/export?${params.toString()}`);
@@ -62,10 +148,50 @@ export default function ExportPanel() {
   }
 
   const totalRows = sheets && selected ? sheets.filter((s) => selected.includes(s.key)).reduce((a, s) => a + s.rowCount, 0) : 0;
+  const presetLabel = PRESETS.find((p) => p.key === preset)?.label ?? "";
+  const rangeText = preview?.rangeText ?? null;
   const selCount = selected && sheets ? `${selected.length} de ${sheets.length}` : "";
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {/* Período — sempre visível; o range resolvido (datas reais) nunca fica escondido */}
+      <div className="lg:col-span-2 rounded-card bg-surface shadow-card p-5 sm:p-6" data-testid="export-period">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between mb-3">
+          <h3 className="text-card-title text-text-primary">Período da planilha</h3>
+          <p className="text-sm text-text-secondary [font-variant-numeric:tabular-nums]" data-testid="export-range-text" aria-live="polite">
+            {loading ? "Calculando período…" : previewError ? "" : rangeText ? <><span className="font-medium text-text-primary">{presetLabel}</span> · {rangeText}</> : ""}
+          </p>
+        </div>
+        <div role="radiogroup" aria-label="Período da planilha" className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 sm:flex-wrap sm:overflow-visible">
+          {PRESETS.map((p) => (
+            <button
+              key={p.key}
+              role="radio"
+              aria-checked={preset === p.key}
+              data-preset={p.key}
+              onClick={() => choosePreset(p.key)}
+              className={`focus-ring shrink-0 whitespace-nowrap rounded-pill px-3.5 py-2 text-sm font-medium transition-colors cursor-pointer ${preset === p.key ? "bg-ink text-white" : "bg-chip-bg text-text-secondary hover:text-text-primary"}`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        {preset === "custom" && (
+          <div className="mt-3 grid grid-cols-2 gap-3 max-w-md">
+            <label className="block">
+              <span className="text-eyebrow text-text-muted">De</span>
+              <input value={customFrom} onChange={(e) => setCustomFrom(maskDate(e.target.value))} inputMode="numeric" placeholder="DD/MM/AAAA" maxLength={10} aria-label="Data inicial" className="focus-ring mt-1 w-full rounded-control border border-border-strong bg-surface px-3 py-2 text-sm tabular" />
+            </label>
+            <label className="block">
+              <span className="text-eyebrow text-text-muted">Até</span>
+              <input value={customTo} onChange={(e) => setCustomTo(maskDate(e.target.value))} inputMode="numeric" placeholder="DD/MM/AAAA" maxLength={10} aria-label="Data final" className="focus-ring mt-1 w-full rounded-control border border-border-strong bg-surface px-3 py-2 text-sm tabular" />
+            </label>
+          </div>
+        )}
+        {previewError && <p role="alert" className="mt-3 text-sm text-red-700">{previewError}</p>}
+        {preset === "all_time" && <p className="mt-3 text-caption text-text-muted">Sem filtro de datas: leva tudo que o Norte guarda, de qualquer época.</p>}
+      </div>
+
       {/* Hero escuro — "Levar uma cópia" */}
       <div className="relative overflow-hidden rounded-card bg-ink p-8 text-white">
         <div className="pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-accent/20 blur-3xl" aria-hidden="true" />
@@ -93,14 +219,14 @@ export default function ExportPanel() {
 
           <div className="flex flex-wrap gap-2 mb-6 text-xs">
             <span className="rounded-pill bg-white/10 px-3 py-1.5">Formato XLSX</span>
-            <span className="rounded-pill bg-white/10 px-3 py-1.5">Período {PERIOD_LABEL[period]}</span>
+            <span className="rounded-pill bg-white/10 px-3 py-1.5">{rangeText ? `${presetLabel} · ${rangeText}` : presetLabel}</span>
             {lastResult && <span className="rounded-pill bg-white/10 px-3 py-1.5">Gerado agora</span>}
           </div>
 
           {state === "idle" && (
-            <Button variant="accent" className="w-full" onClick={runExport} disabled={!sheets}>
+            <Button variant="accent" className="w-full" onClick={runExport} disabled={!sheets || loading || !!previewError}>
               <Download className="h-4 w-4" aria-hidden="true" />
-              Baixar planilha completa
+              Baixar planilha
             </Button>
           )}
           {state === "exportando" && (
@@ -139,24 +265,12 @@ export default function ExportPanel() {
 
         {custom && (
           <div className="rounded-control bg-chip-bg p-4 mb-4">
-            <div className="text-eyebrow text-text-muted mb-2">Período</div>
-            <div className="flex gap-1 rounded-control bg-surface p-1">
-              {Object.entries(PERIOD_LABEL).map(([key, label]) => (
-                <button
-                  key={key}
-                  onClick={() => setPeriod(key)}
-                  className={`focus-ring flex-1 rounded-control px-2 py-1.5 text-xs font-medium transition-colors cursor-pointer ${period === key ? "bg-ink text-white" : "text-text-secondary hover:bg-chip-bg"}`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <p className="text-caption text-text-muted mt-2">Toque nas abas abaixo pra tirar ou colocar de volta.</p>
+            <p className="text-caption text-text-muted">Toque nas abas abaixo pra tirar ou colocar de volta.</p>
           </div>
         )}
 
         <div className="max-h-[352px] overflow-y-auto -mx-2 px-2">
-          {!sheets && <p className="text-body text-text-muted">Carregando…</p>}
+          {!sheets && <p className="text-body text-text-muted">{loading ? "Carregando…" : "Escolha um período válido para ver o que vem dentro."}</p>}
           {sheets?.map((s) => {
             const checked = selected?.includes(s.key);
             return (
@@ -169,9 +283,9 @@ export default function ExportPanel() {
                 <input type="checkbox" className="sr-only" checked={!!checked} onChange={() => toggleSheet(s.key)} />
                 <span className="min-w-0 flex-1">
                   <span className={`block text-sm ${checked ? "text-text-primary" : "text-text-muted"}`}>{s.sheetName}</span>
-                  <span className="block text-caption text-text-muted truncate">{s.description}</span>
+                  <span className="block text-caption text-text-muted truncate">{s.description}{s.globalStateCount > 0 ? ` · ${s.globalStateCount} de estado atual` : ""}{s.noEventDateCount > 0 ? ` · ${s.noEventDateCount} sem data` : ""}</span>
                 </span>
-                <span className="tabular shrink-0 text-xs text-text-muted">{s.rowCount.toLocaleString("pt-BR")}</span>
+                <span className="tabular shrink-0 text-xs text-text-muted" data-sheet-count={s.key}>{s.rowCount.toLocaleString("pt-BR")}</span>
               </label>
             );
           })}

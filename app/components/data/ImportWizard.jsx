@@ -12,6 +12,31 @@ const MODES = [
   { key: "replace", label: "Substituir", description: "Remove o conjunto atual do período e coloca o do arquivo no lugar.", icon: Trash2, danger: true },
 ];
 
+const PRESET_TEXT = {
+  current_cycle: "Ciclo atual",
+  previous_cycle: "Ciclo anterior",
+  last_30_days: "Últimos 30 dias",
+  last_90_days: "Últimos 90 dias",
+  this_year: "Este ano",
+  since_norte_start: "Desde o início do Norte",
+  all_time: "Período todo",
+  custom: "Personalizado",
+};
+
+const fmtDay = (k) => (k ? `${k.slice(8, 10)}/${k.slice(5, 7)}/${k.slice(0, 4)}` : "");
+const fmtWhen = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" });
+};
+const BR_DATE = /^\d{2}\/\d{2}\/\d{4}$/;
+function maskDate(v) {
+  const d = v.replace(/\D/g, "").slice(0, 8);
+  if (d.length > 4) return `${d.slice(0, 2)}/${d.slice(2, 4)}/${d.slice(4)}`;
+  if (d.length > 2) return `${d.slice(0, 2)}/${d.slice(2)}`;
+  return d;
+}
+
 const TAG_STYLE = {
   Novo: "bg-accent/20 text-ink",
   Atualiza: "bg-chip-bg text-text-secondary",
@@ -35,6 +60,9 @@ export default function ImportWizard({ onDone }) {
   const [confirmText, setConfirmText] = useState("");
   const [applying, setApplying] = useState(false);
   const [result, setResult] = useState(null);
+  const [legacyFile, setLegacyFile] = useState(null); // arquivo legado aguardando o período (De/Até) para o Substituir
+  const [scopeFrom, setScopeFrom] = useState("");
+  const [scopeTo, setScopeTo] = useState("");
   const inputRef = useRef(null);
 
   function reset() {
@@ -45,9 +73,12 @@ export default function ImportWizard({ onDone }) {
     setResolutions({});
     setConfirmText("");
     setResult(null);
+    setLegacyFile(null);
+    setScopeFrom("");
+    setScopeTo("");
   }
 
-  async function handleFile(f) {
+  async function handleFile(f, range = null) {
     if (!f) return;
     setFile(f);
     setStep(1);
@@ -55,15 +86,27 @@ export default function ImportWizard({ onDone }) {
     const form = new FormData();
     form.append("file", f);
     form.append("mode", mode);
-    form.append("period", "all");
+    // o escopo do Substituir é decidido no servidor a partir do período que o arquivo declara; De/Até só para arquivo legado
+    if (range) {
+      form.append("scopeFrom", range.from);
+      form.append("scopeTo", range.to);
+    }
     try {
       const res = await fetch("/api/data/import/preview", { method: "POST", body: form });
       const data = await res.json();
       if (!res.ok) {
+        if (data.error === "legacy_replace_requires_range") {
+          setLegacyFile(f);
+          setError(null);
+          setStep(0);
+          return;
+        }
         setError(data.message || "Não foi possível validar o arquivo.");
+        setLegacyFile(null);
         setStep(0);
         return;
       }
+      setLegacyFile(null);
       setPreview(data);
       setStep(2);
     } catch {
@@ -100,7 +143,7 @@ export default function ImportWizard({ onDone }) {
   }
 
   const isSub = mode === "replace";
-  const confirmOk = !isSub || confirmText.trim().toUpperCase() === "SUBSTITUIR";
+  const confirmOk = (!isSub || confirmText.trim().toUpperCase() === "SUBSTITUIR") && !(isSub && preview?.summary?.blocked);
 
   return (
     <div className="space-y-4">
@@ -136,8 +179,34 @@ export default function ImportWizard({ onDone }) {
         </div>
       )}
 
+      {/* Step 0b — arquivo legado no Substituir: o período precisa ser informado, nunca inventado */}
+      {step === 0 && legacyFile && (
+        <div className="rounded-card bg-warning-bg text-warning-text p-6" data-testid="legacy-range">
+          <h3 className="text-card-title mb-1">Arquivo legado — período não informado</h3>
+          <p className="text-sm mb-4">
+            {legacyFile.name} não diz qual período cobre. Para substituir, informe o período exato (De/Até): só os registros desse período saem do Norte; o que está fora fica como está.
+          </p>
+          <div className="grid grid-cols-2 gap-3 max-w-md mb-4">
+            <label className="block">
+              <span className="text-eyebrow">De</span>
+              <input value={scopeFrom} onChange={(e) => setScopeFrom(maskDate(e.target.value))} inputMode="numeric" placeholder="DD/MM/AAAA" maxLength={10} aria-label="Início do período a substituir" className="focus-ring mt-1 w-full rounded-control border border-border-strong bg-surface px-3 py-2 text-sm text-text-primary tabular" />
+            </label>
+            <label className="block">
+              <span className="text-eyebrow">Até</span>
+              <input value={scopeTo} onChange={(e) => setScopeTo(maskDate(e.target.value))} inputMode="numeric" placeholder="DD/MM/AAAA" maxLength={10} aria-label="Fim do período a substituir" className="focus-ring mt-1 w-full rounded-control border border-border-strong bg-surface px-3 py-2 text-sm text-text-primary tabular" />
+            </label>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="primary" disabled={!BR_DATE.test(scopeFrom) || !BR_DATE.test(scopeTo)} onClick={() => handleFile(legacyFile, { from: scopeFrom, to: scopeTo })}>
+              Revisar este período
+            </Button>
+            <Button variant="secondary" onClick={() => { setLegacyFile(null); setFile(null); }}>Cancelar</Button>
+          </div>
+        </div>
+      )}
+
       {/* Step 0 — upload */}
-      {step === 0 && (
+      {step === 0 && !legacyFile && (
         <div
           onClick={() => inputRef.current?.click()}
           onDragOver={(e) => e.preventDefault()}
@@ -192,6 +261,42 @@ export default function ImportWizard({ onDone }) {
               </div>
             )}
 
+            {/* Metadados do arquivo — o que o arquivo diz de si; arquivo legado nunca ganha um período inventado */}
+            <div className="rounded-control bg-chip-bg p-4 mb-4 text-sm" data-testid="import-meta">
+              {preview.legacyFile ? (
+                <p className="font-medium text-text-primary">Arquivo legado — período não informado</p>
+              ) : (
+                <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 sm:grid-cols-2">
+                  <Meta label="Exportado em" value={fmtWhen(preview.exportMeta?.exportedAt)} />
+                  <Meta label="Período" value={preview.exportMeta?.rangePreset === "all_time" ? "Período todo (sem filtro de datas)" : `${fmtDay(preview.exportMeta?.dateFrom)} → ${fmtDay(preview.exportMeta?.dateTo)}`} />
+                  <Meta label="Tipo" value={PRESET_TEXT[preview.exportMeta?.rangePreset] ?? preview.exportMeta?.rangePreset ?? "—"} />
+                  <Meta label="Versão do arquivo" value={preview.exportMeta?.schemaVersion ?? "—"} />
+                </dl>
+              )}
+              {mode === "replace" && preview.scope && <p className="mt-2 text-text-secondary">Período a substituir: <span className="font-medium text-text-primary">{preview.scope.text}</span></p>}
+            </div>
+
+            {preview.counts && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3" data-testid="import-counts">
+                <Stat value={preview.counts.total} label="Linhas no arquivo" />
+                <Stat value={preview.counts.new} label="Novas" />
+                <Stat value={preview.counts.existing} label="Já existem" />
+                <Stat value={preview.counts.updates} label="Atualizações" />
+                <Stat value={preview.counts.duplicates} label="Duplicadas" />
+                <Stat value={preview.counts.conflicts} label="Conflitos" />
+                <Stat value={preview.counts.ignored} label="Ignoradas" />
+                <Stat value={preview.counts.destructive} label="Destrutivas" />
+              </div>
+            )}
+
+            {mode === "replace" && (
+              <div className="rounded-control bg-warning-bg text-warning-text px-3 py-2 text-sm mb-3" data-testid="replace-scope-note">
+                Dentro do período: {preview.summary.insideScope} registro(s) existentes · Fora do período: {preview.summary.outsideScopeExisting} registro(s) existentes, <strong>{preview.summary.outsideScopeAffected} afetados</strong>.
+                {preview.summary.fileRowsIgnoredOutsideScope > 0 && ` ${preview.summary.fileRowsIgnoredOutsideScope} linha(s) do arquivo fora do período foram ignoradas.`}
+                {" "}Contas, regras recorrentes, configurações, compromissos sem data e âncoras nunca são tocados.
+              </div>
+            )}
+
             {mode === "replace" ? (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <Stat value={preview.summary.toCreate} label="Vêm do arquivo" />
@@ -199,14 +304,7 @@ export default function ImportWizard({ onDone }) {
                 <Stat value={preview.summary.protectedCount} label="Protegidos (ficam)" />
                 <Stat value={preview.summary.invalid} label="Inválidos" />
               </div>
-            ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <Stat value={preview.summary.creates} label="Registros novos" />
-                <Stat value={preview.summary.updates} label="Para atualizar" />
-                <Stat value={preview.summary.conflicts} label="Conflitos" />
-                <Stat value={preview.summary.invalid} label="Inválidos" />
-              </div>
-            )}
+            ) : null}
           </div>
 
           {preview.sampleDiffRows?.length > 0 && (
@@ -403,6 +501,15 @@ function Stat({ value, label }) {
     <div>
       <div className="tabular text-xl font-semibold text-text-primary">{value}</div>
       <div className="text-caption text-text-muted">{label}</div>
+    </div>
+  );
+}
+
+function Meta({ label, value }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-text-muted">{label}</dt>
+      <dd className="text-text-primary font-medium tabular text-right">{value}</dd>
     </div>
   );
 }

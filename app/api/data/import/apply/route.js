@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { applyImportBatch, StaleImportError } from "@/lib/dataHub/apply";
-import { applyReplace } from "@/lib/dataHub/replace";
+import { applyReplace, ReplaceScopeError } from "@/lib/dataHub/replace";
 
 // Fase 6.0 (Design Freeze) / 6.0.1 (Integrity Closure) — APPLY. Autenticado +
 // CSRF via middleware.js (POST, mesmo contrato de qualquer outra mutação —
@@ -56,7 +56,11 @@ export async function POST(request) {
   try {
     let result;
     if (batch.mode === "replace") {
-      result = await applyReplace(prisma, { id: batch.id, datasets: batch.datasets, period: body.period, rowsBySheet: batch.rows, fileName: batch.fileName, fileHash: batch.fileHash });
+      // Fase 10.3 — o escopo é o que foi PREVISTO e guardado no plano do lote; nunca vem do corpo da requisição. Lote de
+      // substituir sem escopo (ex.: criado antes da 10.3) é recusado: antes, sem período, apagava o ledger inteiro.
+      const scope = batch.plan?.scope;
+      if (!scope) return NextResponse.json({ error: "replace_scope_missing", message: "Esta revisão não tem um período definido. Envie o arquivo de novo para revisar." }, { status: 409 });
+      result = await applyReplace(prisma, { id: batch.id, datasets: batch.datasets, scope, rowsBySheet: batch.rows, fileName: batch.fileName, fileHash: batch.fileHash });
     } else {
       result = await applyImportBatch(prisma, {
         id: batch.id,
@@ -72,6 +76,9 @@ export async function POST(request) {
 
     return NextResponse.json({ ok: true, counts: result.counts, undoDeadline: result.undoDeadline });
   } catch (err) {
+    if (err instanceof ReplaceScopeError) {
+      return NextResponse.json({ error: err.code, message: err.message }, { status: 409 });
+    }
     if (err instanceof StaleImportError) {
       return NextResponse.json({ error: "stale_import", message: "Os dados mudaram desde a revisão. Valide novamente." }, { status: 409 });
     }

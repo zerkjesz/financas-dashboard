@@ -28,8 +28,47 @@ nunca persistido em disco no servidor.
 - **Metadados preservados**: `id`, `createdAt`/`updatedAt`, `source` (manual/
   telegram/migration/import) e `confidence` aparecem nas abas onde existem no
   schema — nunca descartados só pra simplificar a planilha.
-- **Customização** (`ExportPanel.jsx`): período (todo o histórico ou um recorte) e
-  seleção de abas — "baixar tudo" é sempre a opção primária/em destaque.
+- **Customização** (`ExportPanel.jsx`): período (sempre visível) e seleção de abas.
+
+### Período do export (Fase 10.3)
+
+`GET /api/data/export?preset=…&dateFrom=…&dateTo=…` e o preview somente leitura
+`GET /api/data/export/preview` (mesmos parâmetros; zero escrita — nada de
+DataOperation, Bill materializada ou `updatedAt`). A resolução do período mora em
+`lib/dataHub/range.js` e o ciclo reutiliza o helper da Fase 10.2 (24→23), nunca uma
+regra nova.
+
+| Preset | Intervalo |
+|---|---|
+| `current_cycle` (padrão) | ciclo financeiro atual (ex.: 24/09–23/10) |
+| `previous_cycle` | ciclo imediatamente anterior |
+| `last_30_days` / `last_90_days` | hoje − 29 / − 89 dias → hoje (fuso `America/Sao_Paulo`) |
+| `this_year` | 01/01 → hoje |
+| `since_norte_start` | 24/08/2026 (início do Norte) → hoje |
+| `all_time` | **sem filtro de datas** — nunca herda dateFrom/dateTo/mês/ciclo de estado anterior |
+| `custom` | De/Até em `DD/MM/AAAA` (ou ISO); formato, data inexistente (31/02), início > fim e vazio são recusados (400) |
+
+O intervalo resolvido é sempre mostrado na tela e vai no arquivo.
+
+**Data econômica por entidade** (`EXPORT_DATE_SEMANTICS`, nunca `createdAt` como regra
+universal): receitas/despesas/transferências/ajustes de saldo/movimentos → `occurredAt`;
+compras → `purchasedAt`; parcelas de cartão → competência (`billMonth`) dentro do
+período; faturas → vencimento; contas (Bill) → vencimento, senão pagamento;
+parcelas externas → vencimento, senão pagamento; recebíveis → data esperada;
+orçamentos por categoria → início do ciclo. Classes: `IN_RANGE` (data dentro),
+`GLOBAL_STATE` (contas, cartões, regras recorrentes, metas, reservas, planos,
+contingências, configurações — entram inteiros em qualquer recorte) e `NO_EVENT_DATE`
+(sem data de evento, ex.: compromisso sem prazo — entram e são contados à parte).
+`all_time` inclui tudo que o Norte suporta.
+
+**Metadados** (aba `Resumo`, `schemaVersion` **6.1.0**): `Exportado em (ISO)`, `Fuso
+horário`, `Preset do período`, `Data inicial`/`Data final`, `Início/Fim do ciclo
+financeiro` (quando aplicável) e `Modo do export`. Arquivos 6.0.0 (sem esses
+campos) são **legados**: continuam importáveis e a UI mostra "Arquivo legado —
+período não informado" — o período nunca é deduzido do conteúdo.
+
+Nome do arquivo: `norte-cycle-2026-09-24_2026-10-23.xlsx`, `norte-last-90-days-AAAA-MM-DD.xlsx`,
+`norte-all-time-AAAA-MM-DD.xlsx`…
 
 ### As 24 abas RAW
 
@@ -131,6 +170,17 @@ usam `buildNaturalKeyAdapter` com uma chave específica por domínio.
   `ExternalInstallment.expenseId`, `ConfirmedCommitment.expenseId` ou
   `Receivable.incomeId` — nunca deixa órfão um vínculo que o schema até
   permitiria (`onDelete: SetNull`), mesmo sem o Postgres reclamar.
+  **Escopo do Substituir (Fase 10.3)**: o servidor decide o escopo a partir do período
+  que o **arquivo declara** (nunca de um estado da tela) e o guarda em
+  `ImportBatch.plan.scope`; o apply lê dali. Arquivo de um ciclo/período só substitui
+  aquele período (o usuário pode apenas *estreitar*, nunca ampliar); arquivo "Período
+  todo" é o único que substitui sem recorte; arquivo **legado** exige De/Até
+  explícitos. Nada fora do escopo é candidato à exclusão (`outside.affected = 0` por
+  construção, e o apply revalida e aborta a transação se alguma linha escapar);
+  linhas do arquivo fora do período são ignoradas. A prévia mostra dentro/fora do
+  escopo e bloqueia se não puder garantir fora = 0. Linhas do escopo são recriadas
+  com o mesmo `id` (o undo continua exato). Estado global (contas, regras
+  recorrentes, configurações, compromissos sem data, âncoras) nunca é tocado.
   **Confirmação destrutiva obrigatória**: o servidor exige a frase exata
   `SUBSTITUIR` digitada (`confirmText`), checada tanto na UI quanto na API — não
   é só um "tem certeza?" de um clique.
