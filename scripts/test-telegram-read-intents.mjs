@@ -66,7 +66,8 @@ async function mainInWorld() {
 
   // [A] "como eu tô?" -> summary
   const summary = await handleReadIntent("read_summary");
-  check(summary.includes("Apertado") || summary.includes(targets.status), "[A] read_summary menciona o status canônico", summary.split("\n")[0]);
+  const statusLabel = { TRANQUILO: "Tranquilo", ATENCAO: "Atenção", APERTADO: "Apertado", CRITICO: "Crítico" }[targets.status] ?? targets.status;
+  check(summary.includes(statusLabel), `[A] read_summary menciona o status canônico (Situação: ${statusLabel})`, summary.split("\n")[0]);
   check(containsMoney(summary, targets.freeMoney), "[A] read_summary contém o freeMoney canônico");
   check(containsMoney(summary, targets.safeToSpend), "[A] read_summary contém o safeToSpend canônico");
 
@@ -103,7 +104,8 @@ async function mainInWorld() {
 
   // [I] "quanto tá minha fatura?" -> Card
   const cardReply = await handleReadIntent("read_card");
-  check(containsMoney(cardReply, targets.incurredCard), "[I] read_card contém a fatura atual canônica (incurredLiabilities)");
+  // Fase 10.5: "fatura atual" = total da fatura em curso (716,97); o INCORRIDO dela (incurredCard) é outra coisa — só compras reais.
+  check(containsMoney(cardReply, targets.currentCardBillTotal), "[I] read_card contém a fatura atual canônica (total da fatura)");
 
   // [J] TODAS as READs -> ZERO mutação financeira.
   const after = await fingerprint();
