@@ -294,3 +294,42 @@
   .n5-move .s { display: none; }
   .n5-insight .b { font-size: 18px; min-width: 84px; }
 }
+
+/* ---------- Fase 10.5: pagamento da fatura (CTA, estado pago, modal) ---------- */
+.n5-pay { display: flex; align-items: center; gap: 12px 16px; flex-wrap: wrap; margin-top: 18px; padding-top: 16px; border-top: 1px solid #eef0f2; }
+.n5-pay-btn { min-height: 44px; padding: 0 20px; border: 0; border-radius: 12px; background: #0b0b0c; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.18s, transform 0.12s; }
+.n5-pay-btn:hover { background: #26282b; }
+.n5-pay-btn:active { transform: translateY(1px); }
+.n5-pay-hint { font-size: 12.5px; color: #6e747b; font-variant-numeric: tabular-nums; }
+.n5-paid { display: flex; align-items: center; gap: 14px; margin-top: 18px; padding: 14px 16px; border-radius: 16px; background: #f6f9ec; box-shadow: inset 0 0 0 1px rgba(201, 255, 41, 0.55); flex-wrap: wrap; }
+.n5-paid-mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: #c9ff29; flex: none; }
+.n5-paid-mark svg { width: 18px; height: 18px; fill: none; stroke: #0b0b0c; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.n5-paid-text { flex: 1; min-width: 180px; }
+.n5-paid-text .t { font-weight: 600; font-size: 14px; }
+.n5-paid-text .s { font-size: 12.5px; color: #565c63; margin-top: 1px; }
+.n5-paid-undo { border: 0; background: transparent; padding: 10px 6px; min-height: 44px; font-size: 12.5px; color: #6e747b; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.n5-paid-undo:hover { color: #0b0b0c; }
+.n5-paid-undo:focus-visible, .n5-pay-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(201, 255, 41, 0.9), 0 0 0 4px #0b0b0c; }
+
+.n5-modal-back { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 16px; background: rgba(11, 11, 12, 0.46); font-family: "Geist", system-ui, sans-serif; }
+.n5-modal { width: min(420px, 100%); max-height: calc(100dvh - 32px); overflow: auto; background: #fff; color: #0b0b0c; border-radius: 22px; padding: 24px; box-shadow: 0 24px 70px rgba(11, 11, 12, 0.28); font-size: 14px; line-height: 1.5; }
+.n5-modal *, .n5-modal *::before, .n5-modal *::after { box-sizing: border-box; font-family: inherit; }
+.n5-modal-k { font-family: "Geist Mono", ui-monospace, monospace; text-transform: uppercase; letter-spacing: 0.14em; font-size: 10.5px; color: #6e747b; }
+.n5-modal-title { margin: 6px 0 14px; font-size: 22px; font-weight: 600; letter-spacing: -0.025em; }
+.n5-modal-rows { margin: 0; display: grid; gap: 0; }
+.n5-modal-rows > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 0; border-top: 1px solid #eef0f2; }
+.n5-modal-rows > div:first-child { border-top: 0; }
+.n5-modal-rows dt { color: #6e747b; font-size: 13px; margin: 0; }
+.n5-modal-rows dd { margin: 0; font-weight: 600; text-align: right; }
+.n5-modal-rows label { cursor: pointer; }
+.n5-modal-input { min-height: 40px; padding: 6px 10px; border-radius: 10px; border: 1px solid #d5d8dc; background: #f6f7f8; font-size: 14px; color: #0b0b0c; }
+.n5-modal-input:focus-visible { outline: none; border-color: #0b0b0c; box-shadow: 0 0 0 3px rgba(201, 255, 41, 0.8); }
+.n5-modal-note { margin: 14px 0 0; font-size: 12.5px; color: #6e747b; }
+.n5-modal-error { margin-top: 14px; padding: 10px 12px; border-radius: 12px; background: #fdeeee; color: #8a1f1f; font-size: 13px; }
+.n5-modal-actions { display: flex; gap: 10px; margin-top: 20px; }
+.n5-modal-btn { flex: 1; min-height: 46px; border: 0; border-radius: 13px; background: #0b0b0c; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; }
+.n5-modal-btn.ghost { background: #f2f3f5; color: #3a3f45; font-weight: 500; }
+.n5-modal-btn.danger { background: #b3261e; }
+.n5-modal-btn:disabled { opacity: 0.55; cursor: default; }
+.n5-modal-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(201, 255, 41, 0.9), 0 0 0 4px #0b0b0c; }
+@media (prefers-reduced-motion: no-preference) { .n5-modal { animation: n5Rise 0.22s ease both; } }

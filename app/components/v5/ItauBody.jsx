@@ -4,7 +4,8 @@ import { fmt, fmtS } from "../v4/format.js";
 import { Ico5 } from "./Icons5.jsx";
 import CardSettingsForm from "../card/CardSettingsForm.jsx";
 import PurchaseSimulator from "./PurchaseSimulator.jsx";
-import { billSegments, limitSegments, futureRowBars, commitmentChart, chartAlt, reliefHeadline, dmLabel } from "./cartoesView.js";
+import { BillPaymentAction } from "./PayBill.jsx";
+import { paymentPanelState, billSegments, limitSegments, futureRowBars, commitmentChart, chartAlt, reliefHeadline, dmLabel } from "./cartoesView.js";
 
 const KIND_CLASS = { ink: "n5-ink", mid: "n5-mid", hatch: "n5-hatch", track: "n5-track" };
 const LEGEND_BG = { ink: "#0B0B0C", mid: "#C6CAD0", hatch: "repeating-linear-gradient(45deg,#C6CAD0 0 2px,#EEF0F2 2px 4px)", track: "#EEF0F2" };
@@ -19,8 +20,9 @@ function Legend({ segs }) {
   );
 }
 
-export function CurrentBillPanel({ bill }) {
+export function CurrentBillPanel({ bill, paidBill, onChanged }) {
   const segs = billSegments(bill);
+  const payState = paymentPanelState({ currentBill: bill, paidBill });
   const monthName = bill.monthLong;
   return (
     <div className="n5-panel n5-rise" style={{ flex: 1 }}>
@@ -32,6 +34,7 @@ export function CurrentBillPanel({ bill }) {
       <Legend segs={segs} />
       {bill.totalSource === "observed" && <div className="n5-note">Valor observado no app do banco{bill.observedAt ? ` em ${dmLabel(bill.observedAt)}` : ""}, mais o que foi lançado depois.</div>}
       {bill.unknownDetail > 0 && <div className="n5-note">{fmt(bill.unknownDetail)} ainda sem detalhamento individual no Norte.</div>}
+      <BillPaymentAction state={payState} onChanged={onChanged} />
     </div>
   );
 }

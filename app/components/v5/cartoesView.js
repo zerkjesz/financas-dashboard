@@ -169,3 +169,15 @@ const dmon = (iso) => `${String(Number(iso.slice(8, 10))).padStart(2, "0")} ${MO
 export const itauFacts = (itau) => [{ k: "Fecha", v: dmon(itau.currentBill.closesAt) }, { k: "Vence", v: dmon(itau.currentBill.dueAt) }, { k: "Faltam", v: itau.currentBill.daysToDue > 0 ? `${itau.currentBill.daysToDue} dias` : itau.currentBill.daysToDue === 0 ? "hoje" : "vencida" }];
 export const dayMonthUpper = (iso) => (iso ? dmon(iso).toUpperCase() : "—");
 export const dmLabel = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+
+// ---------- Fase 10.5: pagamento da fatura ----------
+export const dmyLabel = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "");
+// O que mostrar no bloco da fatura: CTA "Marcar fatura como paga" (fatura FECHADA e ainda não paga), estado "✓ Fatura paga"
+// (última fatura quitada) ou nada. Depois de paga, o motor passa a tratar a fatura seguinte como "atual" — por isso o estado pago
+// vem de `itau.paidBill`, e o botão nunca aparece para uma fatura já quitada.
+export function paymentPanelState(itau) {
+  const pay = itau?.currentBill?.payment;
+  if (pay?.canPay) return { mode: "cta", payment: pay };
+  if (itau?.paidBill) return { mode: "paid", paidBill: itau.paidBill };
+  return { mode: "none" };
+}

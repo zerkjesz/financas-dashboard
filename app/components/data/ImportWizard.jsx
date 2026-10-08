@@ -42,6 +42,7 @@ const TAG_STYLE = {
   Atualiza: "bg-chip-bg text-text-secondary",
   Ignora: "bg-chip-bg text-text-muted",
   Conflito: "bg-warning-bg text-warning-text",
+  Concilia: "bg-accent/20 text-ink",
 };
 
 function fmtCell(v) {

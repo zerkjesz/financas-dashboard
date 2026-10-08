@@ -148,7 +148,7 @@ function importCounts(plan, fileRows) {
     }
     ignored += b.invalid.length;
   }
-  return { total: fileRows, new: plan.summary.creates, existing, updates: plan.summary.updates, duplicates: existing, conflicts: plan.summary.conflicts, ignored, destructive: 0 };
+  return { total: fileRows, new: plan.summary.creates, existing: existing + (plan.summary.reconciles ?? 0), updates: plan.summary.updates, duplicates: existing, conflicts: plan.summary.conflicts, ignored, destructive: 0, reconciled: plan.summary.reconciles ?? 0 };
 }
 
 function replaceCounts(plan, fileRows) {

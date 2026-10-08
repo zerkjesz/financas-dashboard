@@ -69,7 +69,8 @@ async function run() {
     "motivo dominante É de fato o maior valor absoluto entre os itens reais",
     `dominante=${dominant.type}:${serializeMoney(dominant.amount)}`
   );
-  check(freeMoneyLegend(serializeMoney(financial.liquidity.freeMoney)) === "além do que está livre hoje", "freeMoney real (negativo) produz a legenda esperada");
+  // Fase 10.5: no retrato congelado o livre deixou de ser negativo (a fatura em curso era só parcela projetada); a legenda segue o SINAL real.
+  check(freeMoneyLegend(serializeMoney(financial.liquidity.freeMoney)) === (Number(serializeMoney(financial.liquidity.freeMoney)) < 0 ? "além do que está livre hoje" : null), "legenda do freeMoney real segue o sinal (negativo => 'além do que está livre hoje'; positivo => sem legenda)");
   check(shouldSuggestSimulation(financial.liquidity.status) === (targets.status === "APERTADO" || targets.status === "CRITICO"), "CTA de simulação aparece exatamente quando o status real justifica");
 
   // ---- Contingência real (item 18 — sem hardcode de nome/valor) -----------

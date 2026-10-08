@@ -142,7 +142,7 @@ export default function CartoesV5() {
         <CardStage keys={keys} index={index} dir={dir} reduced={reduced} onGo={go} onPick={pick} itau={itau} caju={caju} />
         {key === "itau" && itau && (
           <div className="n5-col" key="itau-top">
-            <CurrentBillPanel bill={itau.currentBill} />
+            <CurrentBillPanel bill={itau.currentBill} paidBill={itau.paidBill} onChanged={load} />
             <LimitPanel limit={itau.limit} bill={itau.currentBill} />
           </div>
         )}

@@ -80,7 +80,8 @@ async function main() {
   // hardcoded aqui.
   const cardBillBucket = snapshot.futureObligations.decomposition.find((d) => d.model === "CardBill");
   const externalBucket = snapshot.futureObligations.decomposition.find((d) => d.model === "ExternalInstallment");
-  check(cardBillBucket?.count === 4, "futureObligations: 4 CardBill futuras", `count=${cardBillBucket?.count}`);
+  // Fase 10.5: a parcela projetada da fatura em curso (2026-10) agora é obrigação FUTURA — 5 itens (em curso + 4 seguintes).
+  check(cardBillBucket?.count === 5, "futureObligations: 5 CardBill futuras (a em curso projetada + 4 seguintes)", `count=${cardBillBucket?.count}`);
   check(externalBucket?.count === 29, "futureObligations: 29 ExternalInstallment futuras", `count=${externalBucket?.count}`);
   const decompositionSum = money(cardBillBucket.amount).plus(money(externalBucket.amount));
   check(
