@@ -10,7 +10,8 @@ import { prisma } from "../lib/prisma.js";
 import { computeAccountBalance, listAccountsWithBalances } from "../lib/accounts.js";
 import { computeCardUsedLimit, computeCardTotalLimit } from "../lib/cards.js";
 import { computeAdditionsSinceObservation, getCardBillView } from "../lib/cardBillCalculator.js";
-import { computeFreeMoney } from "../lib/freeMoney.js";
+import { computeFreeMoney, computeSafeToSpend } from "../lib/freeMoney.js";
+import { resolveNextExpectedIncomeFromDb } from "../lib/incomeHorizon.js";
 import { getReserveBalance } from "../lib/reserves.js";
 import { summarizeInternalReimbursements, settleInternalReimbursement } from "../lib/internalReimbursement.js";
 import { buildCatchup106Plan, OBSERVED_AT_POLICY } from "./lib/catchup106Planner.js";
@@ -65,6 +66,7 @@ async function main() {
     check("[P] novembro: observado 1.060,46 · calculado na observação 1.056,35 · lacuna 4,11 · futuras 461,32", plan.card.novObservedTarget === "1060.46" && plan.card.novCalculatedAtObservation === "1056.35" && plan.card.novKnownGap === "4.11" && plan.card.futureTotal === "461.32");
 
     const transfersBefore = await tx.transfer.count();
+    const nextIncomeBefore = JSON.stringify(await resolveNextExpectedIncomeFromDb({ now: new Date("2026-10-13T20:00:00Z"), client: tx }));
     const tStart = new Date();
     const res = await executeCatchup106Plan({ client: tx, plan });
     const tEnd = new Date();
@@ -76,7 +78,7 @@ async function main() {
     const eod = (d) => d.getUTCHours() === 2 && d.getUTCMinutes() === 59 && d.getUTCSeconds() === 59; // 23:59:59 BRT
     const lim0 = await tx.cardLimitUpdate.findFirst({ where: { cardId: w.card.id }, orderBy: { occurredAt: "desc" } });
     check("[E] 3 âncoras RECONCILIATION_ADJUSTMENT no INSTANTE REAL da reconciliação (nunca Expense/Income); NENHUMA é 'fim do dia' fabricado", adjs.length === 3 && adjs.every((a) => a.confidence === "RECONCILIATION_ADJUSTMENT" && a.occurredAt >= tStart && a.occurredAt <= tEnd && !eod(a.occurredAt)) && adjs.map((a) => a.newBalance.toFixed(2)).sort().join() === "12.28,181.00,248.46" && lim0.occurredAt >= tStart && lim0.occurredAt <= tEnd);
-    check("[E] política das âncoras explícita no plano e na nota (instante da leitura bancária desconhecido)", OBSERVED_AT_POLICY === "EXECUTION_INSTANT" && plan.operations.filter((o) => o.kind === "ADD_BALANCE_RECONCILIATION").every((o) => o.data.observedAt === OBSERVED_AT_POLICY && o.data.occurredAt === undefined) && adjs.every((a) => /INSTANTE real da reconciliação/.test(a.note)));
+    check("[E] política das âncoras explícita no plano e na nota (instante da leitura bancária desconhecido)", OBSERVED_AT_POLICY === "EXECUTION_INSTANT" && plan.operations.filter((o) => o.kind === "ADD_BALANCE_RECONCILIATION").every((o) => o.data.observedAt === OBSERVED_AT_POLICY && o.data.occurredAt === undefined) && adjs.every((a) => /INSTANTE real da reconciliação/.test(a.note) && /não releu os arquivos/.test(a.note)));
 
     // Cofrinho / Tattoo
     const cof = await tx.account.findFirst({ where: { slug: "cofrinho-itau" } });
@@ -127,6 +129,9 @@ async function main() {
     check("[R] recebível Tiny 65,90 PENDING (sem Income; não netado com os 1.335)", tiny.status === "PENDING" && tiny.amount.toFixed(2) === "65.90" && tiny.incomeId === null && tiny.expectedDate === null);
     check("[R] Bia 29,00: Receivable RECEIVED + 1 Income 'Reembolso' de 12/10 no Itaú", bia.status === "RECEIVED" && bia.income.amount.toFixed(2) === "29.00" && /Reembolso/.test(bia.income.description) && bia.income.accountId === w.itau.id && bia.income.occurredAt.toISOString().slice(0, 10) === "2026-10-12");
 
+    check("[BIA] reembolso da Bia: Income materializa o Receivable RECEIVED (usa Income = SIM) mas NÃO é salário nem renda recorrente nem próxima renda: sem regra recorrente, sem ocorrência, isRecurring=false, categoria 'Outros', descrição 'NÃO é renda'; vinculado auditavelmente ao Receivable (incomeId)", bia.incomeId === bia.income.id && bia.income.recurringRuleId === null && bia.income.recurringOccurrenceDate === null && bia.income.isRecurring === false && bia.income.category === "Outros" && /NÃO é renda/.test(bia.income.description) && /Ana Beatriz/.test(bia.counterparty));
+    check("[BIA] projeção da próxima renda IDÊNTICA antes × depois do catch-up (a Income da Bia não entra no horizonte de renda)", JSON.stringify(await resolveNextExpectedIncomeFromDb({ now: new Date("2026-10-13T20:00:00Z"), client: tx })) === nextIncomeBefore);
+
     // repasses
     const caju = await summarizeInternalReimbursements({ fromAccountId: w.caju.id, client: tx });
     check("[Z] Repasses do Caju: 29,50 + 71,00 = 100,50 PENDENTES; saldo real 248,46; após repasses 147,96", caju.pendingTotal === 100.5 && caju.accountBalance === 248.46 && caju.availableAfterPending === 147.96 && caju.items.map((i) => i.amount).sort().join() === "29.5,71");
@@ -175,6 +180,19 @@ async function main() {
       stale = e;
     }
     check("[N] reexecutar o plano ANTIGO ⇒ CatchupAbort por preconditions, 0 escritas", stale instanceof CatchupAbort && (await touched(tx)) === sig2, String(stale?.message));
+    // ---- Tattoo/Cofrinho: sem dupla contagem
+    const accsT = await listAccountsWithBalances({ client: tx });
+    const cashOnly = accsT.filter((a) => a.type === "checking" || a.type === "cash").reduce((sum, a) => sum + Number(a.balance), 0);
+    const nowT = new Date("2026-10-13T20:00:00Z");
+    const nextT = new Date("2026-10-24T00:00:00Z");
+    const fmWith = await computeFreeMoney({ now: nowT, accounts: accsT, nextIncomeDate: nextT, client: tx });
+    check("[TATTOO] reserva = 150,00 · meta guardada = 150,00 · Cofrinho (savings) = 150,00", (await getReserveBalance((await tx.reserve.findFirst({ where: { name: "Tattoo" } })).id, { client: tx })).toFixed(2) === "150.00" && (await tx.goal.findUnique({ where: { id: w.goal.id } })).savedAmount.toFixed(2) === "150.00" && (await bal(tx, (await tx.account.findFirst({ where: { slug: "cofrinho-itau" } })).id)) === "150.00");
+    check("[TATTOO] NÃO está no caixa irrestrito (= só Itaú + Dinheiro) e NÃO é subtraído de novo como protegido (protegido = 0)", Math.abs(Number(fmWith.unrestrictedCash) - cashOnly) < 0.005 && Number(fmWith.protectedMoney) === 0, `${fmWith.unrestrictedCash} / ${cashOnly} / ${fmWith.protectedMoney}`);
+    const safeWith = computeSafeToSpend(fmWith.freeMoney, 10);
+    await tx.reserveMovement.deleteMany({});
+    await tx.reserve.deleteMany({});
+    const fmWithout = await computeFreeMoney({ now: nowT, accounts: await listAccountsWithBalances({ client: tx }), nextIncomeDate: nextT, client: tx });
+    check("[TATTOO] sem dupla contagem: freeMoney/safeToSpend IDÊNTICOS com e sem a Reserve (o efeito protetor já é estrutural: o dinheiro está fora do caixa)", String(fmWith.freeMoney) === String(fmWithout.freeMoney) && String(safeWith) === String(computeSafeToSpend(fmWithout.freeMoney, 10)) && String(fmWith.protectedMoney) === String(fmWithout.protectedMoney));
   });
 
   // resíduo muda ⇒ ABORTA

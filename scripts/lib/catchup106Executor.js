@@ -17,7 +17,7 @@ import { reconcileBankLineWithCardBillPayment, PAYMENT_KEY_PREFIX } from "../../
 import { createReceivable, markReceivableReceived } from "../../lib/receivables.js";
 import { createInternalReimbursement } from "../../lib/internalReimbursement.js";
 import { serializeRecord } from "../../lib/telegramAi/correctionService.js";
-import { PLAN_TAG, TARGETS, OBSERVED_AT_POLICY, LATEST_LINE_DAY } from "./catchup106Planner.js";
+import { PLAN_TAG, TARGETS, OBSERVED_AT_POLICY, LATEST_LINE_DAY, SOURCES_NOTE } from "./catchup106Planner.js";
 
 const day = (s) => new Date(`${s}T00:00:00.000Z`);
 const dayKey = (d) => d.toISOString().slice(0, 10);
@@ -258,7 +258,7 @@ async function runPlan(tx, plan) {
         if (clash) fail(op, "observação de limite equivalente já existe");
         const d = op.data;
         if (d.observedAt !== OBSERVED_AT_POLICY) fail(op, "política de instante da observação inesperada");
-        await tx.cardLimitUpdate.create({ data: { cardId: pre.cardId, newTotalLimit: d.newTotalLimit, newUsedLimit: d.newUsedLimit, reportedAvailable: d.reportedAvailable, note: "Snapshot do limite no app do Itaú em 13/10/2026 (total 5.087,00; disponível 3.465,22; utilizado 1.621,78) = fatura de novembro 1.060,46 + parcelas futuras 461,32 + compra de 12/10 ainda não postada 100,00.", source: "manual", confidence: "CONFIRMED", rawMessage: d.rawMessage, occurredAt: observedAt } });
+        await tx.cardLimitUpdate.create({ data: { cardId: pre.cardId, newTotalLimit: d.newTotalLimit, newUsedLimit: d.newUsedLimit, reportedAvailable: d.reportedAvailable, note: "Snapshot do limite no app do Itaú em 13/10/2026 (total 5.087,00; disponível 3.465,22; utilizado 1.621,78) = fatura de novembro 1.060,46 + parcelas futuras 461,32 + compra de 12/10 ainda não postada 100,00. " + SOURCES_NOTE, source: "manual", confidence: "CONFIRMED", rawMessage: d.rawMessage, occurredAt: observedAt } });
         bump("created", "cardLimitUpdate");
         break;
       }
