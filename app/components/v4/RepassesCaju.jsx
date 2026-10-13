@@ -19,8 +19,7 @@ export default function RepassesCaju({ data, onChanged }) {
       const res = await fetch("/api/compromissos/repasses/liquidar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: item.id }) });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j.message || "Não consegui registrar o repasse.");
-      const early = (j.warnings ?? []).includes("SETTLED_BEFORE_LAST_BALANCE_CHECK");
-      setNote(j.status === "ALREADY_SETTLED" ? "Esse repasse já estava feito." : `Repasse de ${fmt(item.amount)} registrado: saiu do Caju e entrou no Itaú.${early ? " Atenção: a data é do dia do último saldo conferido — esse saldo já vale como verdade do dia, então os saldos só mudam a partir do próximo dia." : ""}`);
+      setNote(j.status === "ALREADY_SETTLED" ? "Esse repasse já estava feito." : `Repasse de ${fmt(item.amount)} registrado: saiu do Caju e entrou no Itaú.`);
       setConfirming(null);
       onChanged?.();
     } catch (e) {

@@ -27,10 +27,15 @@ export function zonedInstant(dateStr, timeStr, timeZone = getAppTimezone()) {
   for (let i = 0; i < 3; i++) guess = wall - tzOffsetMs(new Date(guess), timeZone);
   return new Date(guess).toISOString();
 }
-export const ANCHOR_AT = zonedInstant("2026-10-13", "23:59:59"); // 13/10 23:59:59 BRT = 2026-10-14T02:59:59.000Z
-export const LIMIT_OBSERVED_AT = ANCHOR_AT;
-// A leitura do app em 13/10 NÃO inclui a compra de 12/10 (Rei do Pernil, ainda não postada): o instante da observação é o do último dia
-// postado (11/10 23:59:59 BRT). Assim o motor trata a compra de 12/10 como "lançado depois da observação" (incorrido, fora do observado).
+// MODELO DE ÂNCORA (corrigido): uma âncora de saldo/limite representa o saldo observado EM UM INSTANTE — NÃO "o fim inteiro do dia". O instante
+// exato da leitura bancária não é conhecido; a política explícita e segura é gravar a âncora no INSTANTE REAL da reconciliação no Norte (o
+// momento em que o executor roda), sempre depois de todas as linhas do plano (datas-calendário ≤ 13/10). Movimento real posterior — inclusive
+// no mesmo dia civil, como a liquidação de um repasse — altera o saldo; movimento anterior já está refletido no saldo observado.
+export const OBSERVED_AT_POLICY = "EXECUTION_INSTANT";
+export const LATEST_LINE_DAY = "2026-10-13"; // última data-calendário incluída no catch-up
+// A leitura do app em 13/10 NÃO inclui a compra de 12/10 (Rei do Pernil, ainda não postada): o corte da FATURA é o último dia postado
+// (11/10 23:59:59 BRT). Não é âncora de saldo: é o corte do extrato do cartão, para o motor tratar a compra de 12/10 como "lançada depois da
+// observação" (incorrida, fora do observedTotal).
 export const BILL_OBSERVED_AT = zonedInstant("2026-10-11", "23:59:59");
 
 const day = (s) => new Date(`${s}T00:00:00.000Z`);
@@ -235,14 +240,15 @@ export async function buildCatchup106Plan({ client } = {}) {
     newCardExpenses.push(e);
   }
   const ducatiExists = (await client.purchase.findMany({ where: { cardId: card.id } })).some((p) => (p.rawMessage ?? "").startsWith(`${PLAN_TAG}:card-${DUCATI.key}`) || (dayKey(p.purchasedAt) === DUCATI.purchasedAt && same(p.installmentValue, DUCATI.value) && p.installmentCount === 3));
-  const latestObs = novBill ? await client.cardBillReconciliation.findFirst({ where: { cardId: card.id, cycleMonth: "2026-11" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] }) : null;
-  const obsDone = !!latestObs && same(latestObs.observedTotal, TARGETS.novObserved);
+  // a observação desta fase é identificada pelo MARCADOR (não pelo "último valor"): observações legítimas posteriores não reabrem o plano
+  const phaseObs = novBill ? await client.cardBillReconciliation.findFirst({ where: { cardId: card.id, cycleMonth: "2026-11", rawMessage: `${PLAN_TAG}:card-bill-nov` } }) : null;
+  const obsDone = !!phaseObs;
   // calculado NO MOMENTO da observação = tudo que já estava postado (sem a compra de 12/10)
   const postedNew = newCardExpenses.filter((e) => e.posted);
   let calcAtObservation = calcBefore;
   for (const e of postedNew) calcAtObservation = addMoney(calcAtObservation, e.amount);
   if (!ducatiExists) calcAtObservation = addMoney(calcAtObservation, DUCATI.value);
-  if (obsDone) calcAtObservation = money(latestObs.calculatedTotal); // observação já gravada: o calculado FOI congelado nela
+  if (obsDone) calcAtObservation = money(phaseObs.calculatedTotal); // observação já gravada: o calculado FOI congelado nela
   if (!obsDone && novBill) op({ section: "card", kind: "RECORD_CARD_BILL_OBSERVATION", description: `Observação oficial da fatura de NOVEMBRO em 13/10: R$ 1.060,46 (OPEN, não paga). Detalhe conhecido ${fmt(calcAtObservation)} + 'Outros custos' ${OTHER_COSTS_GAP} (custo bancário confirmado, sem compra inventada). Instante = último dia POSTADO (11/10): a compra de 12/10 fica fora do observado`, target: { model: "cardBillReconciliation", cardId: card.id }, data: { cycleMonth: "2026-11", observedTotal: TARGETS.novObserved, calculatedTotal: fmt(calcAtObservation), delta: fmt(subtractMoney(TARGETS.novObserved, calcAtObservation)), occurredAt: BILL_OBSERVED_AT, confidence: "RECONCILIATION_ADJUSTMENT", rawMessage: `${PLAN_TAG}:card-bill-nov`, note: "Fatura de novembro observada no app do Itaú em 13/10/2026: R$ 1.060,46 (inclui R$ 571,79 de parcelas já contratadas + R$ 488,67 de lançamentos novos, dos quais R$ 4,11 'Outros custos' sem detalhe individual). A compra de 12/10 (Rei do Pernil, R$ 100) ainda não estava postada e NÃO está neste total." }, preconditions: { cardId: card.id, cycleMonth: "2026-11", noObservationWithTotal: TARGETS.novObserved } });
   for (const e of newCardExpenses) {
     calcPlanned = addMoney(calcPlanned, e.amount);
@@ -262,14 +268,14 @@ export async function buildCatchup106Plan({ client } = {}) {
   const dec = fmt(byMonth["2026-12"] ?? 0), jan = fmt(byMonth["2027-01"] ?? 0), feb = fmt(byMonth["2027-02"] ?? 0);
   const futureTotal = fmt(addMoney(addMoney(dec, jan), feb));
   const bills = await client.cardBill.findMany({ where: { cardId: card.id } });
-  for (const b of bills) {
+  for (const b of obsDone ? [] : bills) { // depois da fase aplicada, os totais persistidos seguem o fluxo normal do app
     if (b.status === "paid") continue;
     const projected = b.cycleMonth === "2026-11" ? fmt(calcPlanned) : b.cycleMonth >= "2026-12" ? fmt(byMonth[b.cycleMonth] ?? 0) : null;
     if (projected == null) continue;
     if (!same(b.totalAmount, projected)) op({ section: "card", kind: "SYNC_CARD_BILL_ROW", description: `CardBill ${b.cycleMonth}: total persistido ${b.totalAmount} → ${projected} (o CALCULADO; o observado fica na observação)`, target: { model: "cardBill", id: b.id }, from: { totalAmount: b.totalAmount.toString() }, data: { totalAmount: projected }, preconditions: { billId: b.id, currentTotal: b.totalAmount.toString(), currentStatus: b.status } });
   }
-  const latestLimit = await client.cardLimitUpdate.findFirst({ where: { cardId: card.id }, orderBy: { occurredAt: "desc" } });
-  if (!(latestLimit && same(latestLimit.newUsedLimit, TARGETS.limit.used) && same(latestLimit.reportedAvailable ?? 0, TARGETS.limit.available))) op({ section: "card", kind: "RECORD_CARD_LIMIT_OBSERVATION", description: "Snapshot do limite em 13/10: total 5.087,00 · disponível 3.465,22 · utilizado 1.621,78 (= fatura 1.060,46 + parcelas futuras 461,32 + compra pendente 100,00). Histórico anterior preservado", target: { model: "cardLimitUpdate", cardId: card.id }, data: { newTotalLimit: TARGETS.limit.total, newUsedLimit: TARGETS.limit.used, reportedAvailable: TARGETS.limit.available, occurredAt: LIMIT_OBSERVED_AT, rawMessage: `${PLAN_TAG}:card-limit` }, preconditions: { cardId: card.id, noLimitObservationWithUsed: TARGETS.limit.used } });
+  const limitDone = await client.cardLimitUpdate.findFirst({ where: { cardId: card.id, rawMessage: `${PLAN_TAG}:card-limit` } });
+  if (!limitDone) op({ section: "card", kind: "RECORD_CARD_LIMIT_OBSERVATION", description: "Snapshot do limite em 13/10: total 5.087,00 · disponível 3.465,22 · utilizado 1.621,78 (= fatura 1.060,46 + parcelas futuras 461,32 + compra pendente 100,00). Histórico anterior preservado", target: { model: "cardLimitUpdate", cardId: card.id }, data: { newTotalLimit: TARGETS.limit.total, newUsedLimit: TARGETS.limit.used, reportedAvailable: TARGETS.limit.available, observedAt: OBSERVED_AT_POLICY, rawMessage: `${PLAN_TAG}:card-limit` }, preconditions: { cardId: card.id, noLimitObservationWithUsed: TARGETS.limit.used } });
 
   // ---------- 7) Repasses do Caju (obrigação interna Caju → Itaú; NÃO altera saldo enquanto PENDING)
   // antes da migration aditiva a tabela ainda não existe na PROD: trata como vazia (o executor exige a migration aplicada)
@@ -286,11 +292,16 @@ export async function buildCatchup106Plan({ client } = {}) {
   const itauLedger = addMoney(balancesBefore.itau, itauDelta);
   const cajuLedger = addMoney(balancesBefore.caju, cajuDelta);
   const cashLedger = money(balancesBefore.dinheiro);
-  const itauAdj = subtractMoney(TARGETS.itau, itauLedger);
-  const cajuAdj = subtractMoney(TARGETS.caju, cajuLedger);
-  const cashAdj = subtractMoney(TARGETS.dinheiro, cashLedger);
+  // IDEMPOTÊNCIA: a reconciliação desta fase já gravada (âncora marcada) é o ponto de partida — movimentos LEGÍTIMOS posteriores a ela
+  // (ex.: a liquidação de um repasse, uma compra nova) mudam o saldo e NÃO podem ser "corrigidos" de volta ao alvo de 13/10.
+  const doneAnchor = async (acc) => client.balanceAdjustment.findFirst({ where: { accountId: acc.id, rawMessage: `${PLAN_TAG}:${acc.slug}-recon` } });
+  const [itauDone, cajuDone, cashDone] = await Promise.all([doneAnchor(itau), doneAnchor(caju), doneAnchor(dinheiro)]);
+  const adjOf = (done, target, ledger) => (done ? money(0) : subtractMoney(target, ledger));
+  const itauAdj = adjOf(itauDone, TARGETS.itau, itauLedger);
+  const cajuAdj = adjOf(cajuDone, TARGETS.caju, cajuLedger);
+  const cashAdj = adjOf(cashDone, TARGETS.dinheiro, cashLedger);
   const recon = (acc, target, adj, ledger, note, extra = {}) =>
-    op({ section: acc.slug, kind: "ADD_BALANCE_RECONCILIATION", description: `Âncora de reconciliação ${acc.name}: ledger projetado ${fmt(ledger)} → saldo autoritativo ${target} (ajuste ${fmt(adj)}; RECONCILIATION_ADJUSTMENT, nunca Expense/Income)`, target: { model: "balanceAdjustment", accountId: acc.id }, data: { newBalance: target, confidence: "RECONCILIATION_ADJUSTMENT", occurredAt: ANCHOR_AT, rawMessage: `${PLAN_TAG}:${acc.slug}-recon`, note }, effect: { adjustment: fmt(adj) }, preconditions: { accountId: acc.id, targetBalance: target, expectedAdjustment: fmt(adj), expectedLedgerAfterLines: fmt(ledger), requiresNoRealLineExplains: true, ...extra } });
+    op({ section: acc.slug, kind: "ADD_BALANCE_RECONCILIATION", description: `Âncora de reconciliação ${acc.name}: ledger projetado ${fmt(ledger)} → saldo autoritativo ${target} (ajuste ${fmt(adj)}; RECONCILIATION_ADJUSTMENT, nunca Expense/Income)`, target: { model: "balanceAdjustment", accountId: acc.id }, data: { newBalance: target, confidence: "RECONCILIATION_ADJUSTMENT", observedAt: OBSERVED_AT_POLICY, rawMessage: `${PLAN_TAG}:${acc.slug}-recon`, note }, effect: { adjustment: fmt(adj) }, preconditions: { accountId: acc.id, targetBalance: target, expectedAdjustment: fmt(adj), expectedLedgerAfterLines: fmt(ledger), requiresNoRealLineExplains: true, ...extra } });
   if (!itauAdj.isZero()) recon(itau, TARGETS.itau, itauAdj, itauLedger, "Reconciliação Itaú (extrato até 13/10): após todas as linhas itemizadas o ledger fica 0,06 acima do saldo informado pelo banco (12,28); resíduo de centavos sem linha real correspondente (observação anterior de 2.490,38 preservada).");
   if (!cajuAdj.isZero()) recon(caju, TARGETS.caju, cajuAdj, cajuLedger, "Reconciliação Caju: movimentos narrados somam 282,02 (esperado 248,87) mas o app mostra 248,46 — diferença de −0,41 sem movimento real correspondente.");
   if (!cashAdj.isZero()) recon(dinheiro, TARGETS.dinheiro, cashAdj, cashLedger, "Contagem física de 13/10: R$ 181,00 em mãos. A trilha dos R$ 154,00 consumidos não é conhecida — NÃO se inventam despesas em espécie.");
@@ -312,10 +323,10 @@ export async function buildCatchup106Plan({ client } = {}) {
     { name: "limite utilizado = fatura 1.060,46 + futuras 461,32 + compra pendente 100,00", expected: TARGETS.limit.used, actual: fmt(limitUsed) },
     { name: "limite disponível = total − utilizado", expected: TARGETS.limit.available, actual: fmt(subtractMoney(TARGETS.limit.total, TARGETS.limit.used)) },
     { name: "outubro: 1.795,77 − 118,34 = 1.677,43", expected: TARGETS.octPayment, actual: fmt(subtractMoney(TARGETS.octTotal, TARGETS.octCredit)) },
-    { name: "Itaú projetado = banco", expected: TARGETS.itau, actual: fmt(addMoney(itauLedger, itauAdj)) },
-    { name: "Caju projetado = app (ledger + ajuste)", expected: TARGETS.caju, actual: fmt(addMoney(cajuLedger, cajuAdj)) },
-    { name: "Dinheiro projetado = contagem física (ledger + ajuste)", expected: TARGETS.dinheiro, actual: fmt(addMoney(cashLedger, cashAdj)) },
-    { name: "Caju: 530,89 − 282,02 = 248,87 (antes do ajuste de −0,41); depois de aplicado o ledger já é 248,46", expected: cajuAdj.isZero() ? TARGETS.caju : "248.87", actual: fmt(cajuLedger) },
+    { name: "Itaú projetado = banco (ou âncora da fase já gravada = banco)", expected: TARGETS.itau, actual: itauDone ? fmt(itauDone.newBalance) : fmt(addMoney(itauLedger, itauAdj)) },
+    { name: "Caju projetado = app (ledger + ajuste; ou âncora da fase já gravada = app)", expected: TARGETS.caju, actual: cajuDone ? fmt(cajuDone.newBalance) : fmt(addMoney(cajuLedger, cajuAdj)) },
+    { name: "Dinheiro projetado = contagem física (ledger + ajuste; ou âncora já gravada)", expected: TARGETS.dinheiro, actual: cashDone ? fmt(cashDone.newBalance) : fmt(addMoney(cashLedger, cashAdj)) },
+    { name: "Caju: 530,89 − 282,02 = 248,87 (antes do ajuste de −0,41)", expected: cajuDone ? fmt(cajuDone.newBalance) : "248.87", actual: cajuDone ? fmt(cajuDone.newBalance) : fmt(cajuLedger) },
     { name: "repasses do Caju: 29,50 + 71,00 = 100,50; após repasses 148,… = 147,96", expected: TARGETS.cajuAfter, actual: fmt(subtractMoney(TARGETS.caju, TARGETS.cajuReimbursements)) },
   ].map((c) => ({ ...c, ok: same(c.expected, c.actual) }));
   for (const c of checkpoints) if (!c.ok) blockers.push(`Checkpoint falhou: ${c.name} (esperado ${c.expected}, obtido ${c.actual})`);

@@ -12,10 +12,10 @@ export async function POST(request) {
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
-  const { id, settledAt } = body ?? {};
+  const { id } = body ?? {};
   if (!id) return NextResponse.json({ error: "INVALID", message: "Informe o repasse." }, { status: 400 });
   try {
-    return NextResponse.json(await settleInternalReimbursement({ id, settledAt }), { status: 200 });
+    return NextResponse.json(await settleInternalReimbursement({ id }), { status: 200 });
   } catch (err) {
     const status = domainErrorStatus(err);
     if (status) return NextResponse.json({ error: err.code, message: err.message }, { status });

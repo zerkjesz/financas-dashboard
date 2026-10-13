@@ -17,7 +17,7 @@ import { reconcileBankLineWithCardBillPayment, PAYMENT_KEY_PREFIX } from "../../
 import { createReceivable, markReceivableReceived } from "../../lib/receivables.js";
 import { createInternalReimbursement } from "../../lib/internalReimbursement.js";
 import { serializeRecord } from "../../lib/telegramAi/correctionService.js";
-import { PLAN_TAG, TARGETS } from "./catchup106Planner.js";
+import { PLAN_TAG, TARGETS, OBSERVED_AT_POLICY, LATEST_LINE_DAY } from "./catchup106Planner.js";
 
 const day = (s) => new Date(`${s}T00:00:00.000Z`);
 const dayKey = (d) => d.toISOString().slice(0, 10);
@@ -55,6 +55,9 @@ function rank(op) {
 async function runPlan(tx, plan) {
   if (plan.blockers?.length) throw new CatchupAbort(`o plano tem bloqueios: ${plan.blockers.join(" | ")}`);
   const ops = plan.operations ?? [];
+  // INSTANTE REAL da reconciliação (política das âncoras): depois de toda linha do plano, nunca "fim do dia" fabricado
+  const observedAt = new Date();
+  if (observedAt <= day(LATEST_LINE_DAY)) throw new CatchupAbort(`relógio (${observedAt.toISOString()}) não é posterior às linhas do plano (${LATEST_LINE_DAY}) — âncora não pode preceder movimentos já incluídos`);
   const ids = new Set();
   for (const o of ops) {
     if (!KNOWN.has(o.kind)) throw new CatchupAbort(`operação desconhecida ${o.kind}`, o.id);
@@ -254,7 +257,8 @@ async function runPlan(tx, plan) {
         const clash = await tx.cardLimitUpdate.findFirst({ where: { cardId: pre.cardId, newUsedLimit: pre.noLimitObservationWithUsed } });
         if (clash) fail(op, "observação de limite equivalente já existe");
         const d = op.data;
-        await tx.cardLimitUpdate.create({ data: { cardId: pre.cardId, newTotalLimit: d.newTotalLimit, newUsedLimit: d.newUsedLimit, reportedAvailable: d.reportedAvailable, note: "Snapshot do limite no app do Itaú em 13/10/2026 (total 5.087,00; disponível 3.465,22; utilizado 1.621,78) = fatura de novembro 1.060,46 + parcelas futuras 461,32 + compra de 12/10 ainda não postada 100,00.", source: "manual", confidence: "CONFIRMED", rawMessage: d.rawMessage, occurredAt: new Date(d.occurredAt) } });
+        if (d.observedAt !== OBSERVED_AT_POLICY) fail(op, "política de instante da observação inesperada");
+        await tx.cardLimitUpdate.create({ data: { cardId: pre.cardId, newTotalLimit: d.newTotalLimit, newUsedLimit: d.newUsedLimit, reportedAvailable: d.reportedAvailable, note: "Snapshot do limite no app do Itaú em 13/10/2026 (total 5.087,00; disponível 3.465,22; utilizado 1.621,78) = fatura de novembro 1.060,46 + parcelas futuras 461,32 + compra de 12/10 ainda não postada 100,00.", source: "manual", confidence: "CONFIRMED", rawMessage: d.rawMessage, occurredAt: observedAt } });
         bump("created", "cardLimitUpdate");
         break;
       }
@@ -277,8 +281,9 @@ async function runPlan(tx, plan) {
           break;
         }
         if (!same(residual, pre.expectedAdjustment)) fail(op, `resíduo ${residual.toFixed(2)} ≠ esperado ${pre.expectedAdjustment}`);
+        if (op.data.observedAt !== OBSERVED_AT_POLICY) fail(op, "política de instante da observação inesperada");
         if (await tx.balanceAdjustment.findFirst({ where: { accountId: pre.accountId, rawMessage: op.data.rawMessage } })) fail(op, "ajuste de reconciliação equivalente já existe");
-        await tx.balanceAdjustment.create({ data: { accountId: pre.accountId, newBalance: op.data.newBalance, note: `${op.data.note} Ledger ${ledger.toFixed(2)} vs saldo autoritativo ${op.data.newBalance} — resíduo ${residual.toFixed(2)} (RECONCILIATION_ADJUSTMENT; não é Expense/Income).`, source: "manual", confidence: "RECONCILIATION_ADJUSTMENT", rawMessage: op.data.rawMessage, occurredAt: new Date(op.data.occurredAt) } });
+        await tx.balanceAdjustment.create({ data: { accountId: pre.accountId, newBalance: op.data.newBalance, note: `${op.data.note} Ledger ${ledger.toFixed(2)} vs saldo autoritativo ${op.data.newBalance} — resíduo ${residual.toFixed(2)} (RECONCILIATION_ADJUSTMENT; não é Expense/Income). Âncora gravada no INSTANTE real da reconciliação (o instante exato da leitura bancária não é conhecido): movimentos posteriores, mesmo no mesmo dia, alteram o saldo.`, source: "manual", confidence: "RECONCILIATION_ADJUSTMENT", rawMessage: op.data.rawMessage, occurredAt: observedAt } });
         bump("created", "balanceAdjustment");
         break;
       }

@@ -12,8 +12,8 @@ import { computeCardUsedLimit, computeCardTotalLimit } from "../lib/cards.js";
 import { computeAdditionsSinceObservation, getCardBillView } from "../lib/cardBillCalculator.js";
 import { computeFreeMoney } from "../lib/freeMoney.js";
 import { getReserveBalance } from "../lib/reserves.js";
-import { summarizeInternalReimbursements } from "../lib/internalReimbursement.js";
-import { buildCatchup106Plan, ANCHOR_AT } from "./lib/catchup106Planner.js";
+import { summarizeInternalReimbursements, settleInternalReimbursement } from "../lib/internalReimbursement.js";
+import { buildCatchup106Plan, OBSERVED_AT_POLICY } from "./lib/catchup106Planner.js";
 import { executeCatchup106Plan, CatchupAbort } from "./lib/catchup106Executor.js";
 import { wipe, seedBefore106, Rollback } from "./lib/catchup106Fixture.js";
 
@@ -65,14 +65,18 @@ async function main() {
     check("[P] novembro: observado 1.060,46 · calculado na observação 1.056,35 · lacuna 4,11 · futuras 461,32", plan.card.novObservedTarget === "1060.46" && plan.card.novCalculatedAtObservation === "1056.35" && plan.card.novKnownGap === "4.11" && plan.card.futureTotal === "461.32");
 
     const transfersBefore = await tx.transfer.count();
+    const tStart = new Date();
     const res = await executeCatchup106Plan({ client: tx, plan });
+    const tEnd = new Date();
     check("[E] executor aplicou o plano e passou na verificação interna", res.applied === 52 && res.skipped.length === 0 && res.verification.itau === "12.28" && res.verification.caju === "248.46" && res.verification.dinheiro === "181.00" && res.verification.cofrinho === "150.00", JSON.stringify(res));
 
     // saldos pelo MOTOR REAL
     check("[E] Itaú 12,28 · Caju 248,46 · Dinheiro 181,00", (await bal(tx, w.itau.id)) === "12.28" && (await bal(tx, w.caju.id)) === "248.46" && (await bal(tx, w.dinheiro.id)) === "181.00");
     const adjs = await tx.balanceAdjustment.findMany({ where: { rawMessage: { startsWith: "FASE106-CATCHUP" } } });
-    check("[E] 3 ajustes RECONCILIATION_ADJUSTMENT na âncora 13/10 23:59:59 BRT (nunca Expense/Income)", adjs.length === 3 && adjs.every((a) => a.confidence === "RECONCILIATION_ADJUSTMENT" && a.occurredAt.toISOString() === ANCHOR_AT) && adjs.map((a) => a.newBalance.toFixed(2)).sort().join() === "12.28,181.00,248.46");
-    check("[E] ANCHOR_AT = 2026-10-14T02:59:59Z (13/10 23:59:59 BRT)", ANCHOR_AT === "2026-10-14T02:59:59.000Z");
+    const eod = (d) => d.getUTCHours() === 2 && d.getUTCMinutes() === 59 && d.getUTCSeconds() === 59; // 23:59:59 BRT
+    const lim0 = await tx.cardLimitUpdate.findFirst({ where: { cardId: w.card.id }, orderBy: { occurredAt: "desc" } });
+    check("[E] 3 âncoras RECONCILIATION_ADJUSTMENT no INSTANTE REAL da reconciliação (nunca Expense/Income); NENHUMA é 'fim do dia' fabricado", adjs.length === 3 && adjs.every((a) => a.confidence === "RECONCILIATION_ADJUSTMENT" && a.occurredAt >= tStart && a.occurredAt <= tEnd && !eod(a.occurredAt)) && adjs.map((a) => a.newBalance.toFixed(2)).sort().join() === "12.28,181.00,248.46" && lim0.occurredAt >= tStart && lim0.occurredAt <= tEnd);
+    check("[E] política das âncoras explícita no plano e na nota (instante da leitura bancária desconhecido)", OBSERVED_AT_POLICY === "EXECUTION_INSTANT" && plan.operations.filter((o) => o.kind === "ADD_BALANCE_RECONCILIATION").every((o) => o.data.observedAt === OBSERVED_AT_POLICY && o.data.occurredAt === undefined) && adjs.every((a) => /INSTANTE real da reconciliação/.test(a.note)));
 
     // Cofrinho / Tattoo
     const cof = await tx.account.findFirst({ where: { slug: "cofrinho-itau" } });
@@ -93,7 +97,7 @@ async function main() {
 
     // novembro
     const rec = await tx.cardBillReconciliation.findFirst({ where: { cardId: w.card.id, cycleMonth: "2026-11" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
-    check("[N] observação de novembro 1.060,46 (11/10 23:59:59 BRT), calculado 1.056,35, delta 4,11", rec.observedTotal.toFixed(2) === "1060.46" && rec.calculatedTotal.toFixed(2) === "1056.35" && rec.delta.toFixed(2) === "4.11" && rec.occurredAt.toISOString() === "2026-10-12T02:59:59.000Z");
+    check("[N] observação de novembro 1.060,46 (corte do extrato: 11/10 23:59:59 BRT — NÃO é âncora de saldo), calculado 1.056,35, delta 4,11", rec.observedTotal.toFixed(2) === "1060.46" && rec.calculatedTotal.toFixed(2) === "1056.35" && rec.delta.toFixed(2) === "4.11" && rec.occurredAt.toISOString() === "2026-10-12T02:59:59.000Z");
     const card = await tx.card.findUnique({ where: { id: w.card.id } });
     check("[N] motor: acréscimo depois da observação = 100,00 (Rei do Pernil, incorrido e fora do observado)", (await computeAdditionsSinceObservation(card, "2026-11", rec, { client: tx })).toFixed(2) === "100.00");
     const view = await getCardBillView(card, "2026-11", { client: tx });
@@ -129,11 +133,26 @@ async function main() {
     const lazari = await tx.internalReimbursement.findFirst({ where: { amount: "29.50" } });
     check("[Z] repasse Lazari ligado ao gasto de 30/09; repasse Rei ligado à compra de 12/10; nenhum Transfer/Income gerado pelos repasses", lazari.sourceExpenseId !== null && (await tx.internalReimbursement.findFirst({ where: { amount: "71.00" } })).sourceExpenseId === rei.id && (await tx.transfer.count({ where: { kind: "internal_reimbursement" } })) === 0);
 
+    // ---- MESMO DIA da âncora: liquidar os 2 repasses DEPOIS do catch-up altera os saldos imediatamente
+    const caju0 = await bal(tx, w.caju.id);
+    const itau0 = await bal(tx, w.itau.id);
+    const pend = await tx.internalReimbursement.findMany({ orderBy: { amount: "asc" } });
+    const incomesN = await tx.income.count();
+    const expensesN = await tx.expense.count();
+    const sA = await settleInternalReimbursement({ id: pend[0].id, now: new Date(tEnd.getTime() + 60000), client: tx });
+    check("[D] catch-up → Lazari 29,50 no mesmo dia: Caju 248,46 → 218,96; Itaú +29,50", sA.status === "SETTLED" && caju0 === "248.46" && (await bal(tx, w.caju.id)) === "218.96" && Math.round((Number(await bal(tx, w.itau.id)) - Number(itau0)) * 100) === 2950);
+    const sB = await settleInternalReimbursement({ id: pend[1].id, now: new Date(tEnd.getTime() + 120000), client: tx });
+    check("[D] → Rei do Pernil 71,00: Caju 147,96; Itaú +100,50 no total; repasses 0 pendentes; 2 Transfers; 0 Income/Expense", sB.status === "SETTLED" && (await bal(tx, w.caju.id)) === "147.96" && Math.round((Number(await bal(tx, w.itau.id)) - Number(itau0)) * 100) === 10050 && (await tx.transfer.count({ where: { kind: "internal_reimbursement" } })) === 2 && (await tx.income.count()) === incomesN && (await tx.expense.count()) === expensesN && (await summarizeInternalReimbursements({ fromAccountId: w.caju.id, client: tx })).pendingTotal === 0);
+    // movimentos LEGÍTIMOS posteriores ao catch-up (gasto no Caju e compra no cartão depois da âncora) não podem reabrir o plano
+    await tx.expense.create({ data: { amount: "12.00", description: "gasto legítimo depois do catch-up", category: "Alimentação", accountId: w.caju.id, occurredAt: new Date(tEnd.getTime() + 3600000) } });
+    await tx.expense.create({ data: { amount: "20.00", description: "compra legítima no cartão depois do catch-up", category: "Outros", cardId: w.card.id, occurredAt: new Date(tEnd.getTime() + 3600000) } });
+    check("[D] depois dos repasses e de um gasto legítimo: Caju 135,96 (saldo segue o ledger real, sem 'voltar' ao alvo de 13/10)", (await bal(tx, w.caju.id)) === "135.96");
+
     // dinheiro livre / protegido
     const accounts = await listAccountsWithBalances({ client: tx });
     const fm = await computeFreeMoney({ now: new Date("2026-10-13T20:00:00Z"), accounts, nextIncomeDate: new Date("2026-10-24T00:00:00Z"), client: tx });
     const num = (v) => Number(v?.toString?.() ?? v);
-    check("[F] motor: dinheiro irrestrito = Itaú 12,28 + Dinheiro 181,00 = 193,28 (Caju e Cofrinho FORA)", num(fm.unrestrictedCash).toFixed(2) === "193.28", String(fm.unrestrictedCash));
+    check("[F] motor: dinheiro irrestrito = Itaú 112,78 (12,28 + 100,50 dos repasses) + Dinheiro 181,00 = 293,78 (Caju e Cofrinho FORA)", num(fm.unrestrictedCash).toFixed(2) === "293.78", String(fm.unrestrictedCash));
     check("[F] protegido = 0: a reserva Tattoo vive no Cofrinho (fora do caixa) ⇒ não é subtraída de novo (sem dupla contagem)", num(fm.protectedMoney) === 0, String(fm.protectedMoney));
     check("[F] dívida incorrida de cartão inclui a compra de 12/10 (100,00) e o resultado é finito", num(fm.incurredLiabilities) >= 100 && Number.isFinite(num(fm.freeMoney)), `${fm.incurredLiabilities} / ${fm.freeMoney}`);
     console.log("   ↳ freeMoney:", JSON.stringify({ unrestrictedCash: String(fm.unrestrictedCash), protectedMoney: String(fm.protectedMoney), incurred: String(fm.incurredLiabilities), currentHorizon: String(fm.currentHorizonObligations), future: String(fm.futureObligations), free: String(fm.freeMoney) }));
@@ -144,7 +163,7 @@ async function main() {
 
     // idempotência
     const plan2 = await buildCatchup106Plan({ client: tx });
-    check("[N] 2º planner sobre o estado aplicado ⇒ 0 operações, sem bloqueios, checkpoints OK", plan2.operations.length === 0 && plan2.blockers.length === 0 && plan2.checkpoints.every((c2) => c2.ok), plan2.operations.map((o) => `${o.kind}:${o.description.slice(0, 60)}`).join(" | "));
+    check("[N] 2º planner sobre o estado aplicado (com repasses liquidados e movimentos legítimos posteriores) ⇒ 0 operações, sem bloqueios, checkpoints OK", plan2.operations.length === 0 && plan2.blockers.length === 0 && plan2.checkpoints.every((c2) => c2.ok), plan2.operations.map((o) => `${o.kind}:${o.description.slice(0, 60)}`).join(" | "));
     const sig1 = await touched(tx);
     const res2 = await executeCatchup106Plan({ client: tx, plan: plan2 });
     check("[N] 2ª execução ⇒ 0 mutações", res2.mutations.total === 0 && res2.applied === 0 && (await touched(tx)) === sig1);
