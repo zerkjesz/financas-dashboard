@@ -42,6 +42,8 @@ model Account {
   bills              Bill[]
   reserves           Reserve[]
   fundedCommitments  ConfirmedCommitment[]
+  reimbursementsFrom InternalReimbursement[] @relation("ReimbursementFromAccount")
+  reimbursementsTo   InternalReimbursement[] @relation("ReimbursementToAccount")
 }
 
 model Card {
@@ -131,6 +133,7 @@ model Expense {
 
   externalInstallment ExternalInstallment?
   confirmedCommitment ConfirmedCommitment?
+  internalReimbursements InternalReimbursement[]
 
   // Invariante de app (não garantida pelo Prisma): exatamente um de accountId/cardId deve estar setado.
   @@index([occurredAt])
@@ -164,6 +167,7 @@ model Transfer {
   updatedAt     DateTime        @updatedAt
 
   settledCommitment ConfirmedCommitment?
+  settledReimbursement InternalReimbursement?
 
   @@index([occurredAt])
 }
@@ -909,4 +913,33 @@ model LegacyTransaction {
   installmentTotal   Int?
 
   @@map("transaction_legacy")
+}
+
+// Fase 10.6 — REPASSE INTERNO (ex.: "Repasses do Caju"): obrigação de funding/reembolso ENTRE contas do próprio usuário (Caju → Itaú),
+// quando um gasto saiu da conta errada e o dinheiro precisa voltar. NÃO é Expense, NÃO é Income e NÃO é Transfer enquanto PENDING:
+// só vira movimento real (Transfer fromAccount → toAccount) quando o usuário confirma o repasse (SETTLED), uma única vez
+// (transferId @unique). Enquanto PENDING não altera nenhum saldo; o read-model mostra "disponível após repasses".
+model InternalReimbursement {
+  id              String          @id @default(cuid())
+  fromAccountId   String
+  fromAccount     Account         @relation("ReimbursementFromAccount", fields: [fromAccountId], references: [id])
+  toAccountId     String
+  toAccount       Account         @relation("ReimbursementToAccount", fields: [toAccountId], references: [id])
+  amount          Decimal         @db.Decimal(12, 2)
+  description     String
+  status          String          @default("PENDING") // "PENDING" | "SETTLED" | "CANCELLED"
+  // contexto de origem (qual gasto gerou o repasse) — Expense (da conta ou do cartão) + rótulo livre
+  sourceExpenseId String?
+  sourceExpense   Expense?        @relation(fields: [sourceExpenseId], references: [id], onDelete: SetNull)
+  sourceLabel     String?
+  settledAt       DateTime?
+  transferId      String?         @unique
+  transfer        Transfer?       @relation(fields: [transferId], references: [id], onDelete: SetNull)
+  confidence      DataConfidence?
+  notes           String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([status])
+  @@index([fromAccountId, status])
 }

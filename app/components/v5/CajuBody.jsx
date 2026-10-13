@@ -30,6 +30,11 @@ export function BalanceHero({ caju, mode, onMode, weekendReserve }) {
       <div className="n5-mono">Saldo para comer</div>
       <div className="n5-big">{fmt(caju.balance)}</div>
       <div className="n5-sub" style={{ fontSize: 13.5, marginTop: 4 }}>Só vale em mercado, restaurante e padaria. Fica fora do seu dinheiro livre.</div>
+      {caju.reimbursements?.pendingTotal > 0 && (
+        <div className="n5-obs" role="status">
+          <strong>Repasses pendentes {fmt(caju.reimbursements.pendingTotal)}.</strong> O saldo acima é o real do app; depois de repassar ao Itaú sobram <b>{fmt(caju.reimbursements.availableAfterPending)}</b>. Marque os repasses em Compromissos.
+        </div>
+      )}
       <div className="n5-pace">
         <div className="n5-mono">{r?.nextLabel ? `Ritmo para durar até ${r.nextLabel}` : "Ritmo até a próxima recarga"}</div>
         {msg ? (

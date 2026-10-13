@@ -62,7 +62,7 @@ const expectDomain = async (fn, code) => {
 async function main() {
   const src = fs.readFileSync(new URL("../lib/cardBillPayment.js", import.meta.url), "utf8");
   check("[S] pagamento da fatura não cria Expense (nenhum expense.create no módulo)", !/expense\.(create|createMany|update)/.test(src));
-  check("[S] sem migration: nenhum arquivo de migration novo nesta fase", !fs.readdirSync(new URL("../prisma/migrations/", import.meta.url)).some((m) => /^2026101\d/.test(m) || /fase105|card_?bill_?payment/i.test(m)));
+  check("[S] sem migration: nenhum arquivo de migration novo nesta fase", !fs.readdirSync(new URL("../prisma/migrations/", import.meta.url)).some((m) => (/^2026101\d/.test(m) && !/fase106/i.test(m)) || /fase105|card_?bill_?payment/i.test(m))); // a migration aditiva da 10.6 (InternalReimbursement) é de outra fase
 
   const before = await dbSignature();
 

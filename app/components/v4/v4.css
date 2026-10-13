@@ -299,3 +299,25 @@
 /* Fase 9.1.1 — Reabrir visita/conta paga (persistente) */
 .n4-reopen { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-top: 10px; }
 .n4-reopen .n4-undo-link { min-height: 44px; text-align: left; }
+
+/* ---------- Fase 10.6: Repasses do Caju ---------- */
+.n4-repasses { margin-top: 14px; }
+.n4-repasses-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.n4-repasses-title { margin: 6px 0 0; font-size: 24px; font-weight: 600; letter-spacing: -0.03em; }
+.n4-repasses-sub { margin: 8px 0 0; font-size: 13px; color: #6e747b; max-width: 62ch; }
+.n4-repasses-balance { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 24px; margin-top: 16px; padding: 14px 16px; border-radius: 16px; background: #f6f7f8; }
+.n4-repasses-balance .l { font-size: 12px; color: #6e747b; }
+.n4-repasses-balance .v { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+.n4-repasses-list { list-style: none; margin: 12px 0 4px; padding: 0; }
+.n4-repasse-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; align-items: center; padding: 14px 0; border-top: 1px solid #eef0f2; }
+.n4-repasse-row:first-child { border-top: 0; }
+.n4-repasse-name { font-size: 14.5px; font-weight: 500; }
+.n4-repasse-ctx { font-size: 12.5px; color: #6e747b; margin-top: 2px; }
+.n4-repasse-val { font-size: 15px; text-align: right; }
+.n4-repasse-confirm, .n4-repasse-row > .n4-ghost-btn { grid-column: 1 / -1; justify-self: start; display: flex; align-items: center; gap: 12px; }
+.n4-ghost-btn { min-height: 44px; padding: 0 16px; border-radius: 12px; border: 1px solid #d5d8dc; background: #fff; color: #0b0b0c; font-size: 13.5px; font-weight: 500; cursor: pointer; }
+.n4-ghost-btn:hover { background: #f2f3f5; }
+.n4-ghost-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(201, 255, 41, 0.9), 0 0 0 4px #0b0b0c; }
+.n4-repasses-error { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: #fdeeee; color: #8a1f1f; font-size: 13px; }
+.n4-repasses-note { margin-top: 10px; font-size: 13px; color: #3a6b00; }
+@container (min-width: 560px) { .n4-repasse-row { grid-template-columns: minmax(0, 1fr) auto auto; } .n4-repasse-confirm, .n4-repasse-row > .n4-ghost-btn { grid-column: auto; } }

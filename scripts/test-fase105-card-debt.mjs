@@ -113,7 +113,7 @@ async function main() {
     // ---- observação do banco numa fatura ABERTA: valor observado (+ lançado depois) são compras reais => incorridos (regra anterior preservada)
     await tx.cardBillReconciliation.create({ data: { cardId: w.card.id, cycleMonth: "2026-11", observedTotal: "800", calculatedTotal: "571.79", delta: "228.21", occurredAt: d("2026-10-08T12:00:00Z") } });
     const f5 = await fm(tx);
-    check("[obs] fatura ABERTA com valor observado no banco: o observado (800) é compra real ⇒ incorrido", f5.incurredLiabilities.toFixed(2) === "800.00" && f1.freeMoney.minus(f5.freeMoney).toFixed(2) === "800.00", JSON.stringify([f5.incurredLiabilities.toFixed(2), cardItems(f5, "incurred").map((i) => [i.cycleMonth, i.amount.toFixed(2), i.component]), cardItems(f5, "future").map((i) => [i.cycleMonth, i.amount.toFixed(2)])]));
+    check("[obs] fatura ABERTA com valor observado no banco (800): inclui as parcelas contratadas (571,79, projetadas) ⇒ só o excedente (228,21) é incorrido", f5.incurredLiabilities.toFixed(2) === "228.21" && f1.freeMoney.minus(f5.freeMoney).toFixed(2) === "228.21", JSON.stringify([f5.incurredLiabilities.toFixed(2), cardItems(f5, "incurred").map((i) => [i.cycleMonth, i.amount.toFixed(2), i.component]), cardItems(f5, "future").map((i) => [i.cycleMonth, i.amount.toFixed(2)])]));
   });
 
   // ---- A (variação): duas faturas fechadas e não pagas ⇒ AMBAS incorridas (não só a primeira)

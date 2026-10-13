@@ -1,5 +1,6 @@
 "use client";
 
+import RepassesCaju from "./RepassesCaju.jsx";
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./v4.css";
 import { Ico } from "./Icons.jsx";
@@ -171,6 +172,8 @@ export default function CompromissosV4() {
             </div>
           </div>
         </section>
+
+        <RepassesCaju data={model.repassesCaju} onChanged={load} />
 
         <div className="n4-tabs" role="tablist" aria-label="Compromissos">
           {tabs.map((t) => (
