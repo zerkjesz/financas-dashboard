@@ -49,26 +49,30 @@ export const TARGETS = Object.freeze({
 });
 
 // ----------------------------------------------------------------------------- dados do plano
-// Lançamentos do ITAÚ. `date` = data usada em occurredAt (econômica); `posted` = data bancária quando difere; `inferred` = o relato não traz a data
-// exata da linha: o agrupamento (14/10 para o bloco antes do salário, 26/10 para o bloco depois) segue a ORDEM do extrato e fica registrado na nota.
+// Lançamentos do ITAÚ — datas EXATAS do extrato oficial emitido em 27/10 (nenhuma data inferida). `date` = data usada em occurredAt (econômica);
+// `posted` = data de lançamento bancário quando difere da econômica (Pedro: a descrição bancária referencia 24/10; lançado em 26/10).
 export const ITAU_ITEMS = [
-  // revisão do dia 13 (explica a âncora revisada de 15,21; datadas 13/10 ⇒ já estão dentro do saldo revisado)
+  // 13/10 — revisão do dia (explica a âncora revisada de 15,21; datadas 13/10 ⇒ já estão dentro do saldo revisado)
   { key: "20261013-pix-futuras", date: "2026-10-13", kind: "income", amount: "2.92", category: "Outros", description: "PIX TRANSF FUTURAS — crédito de casa de apostas (entrada extraordinária; NÃO recorrente, NÃO é salário, NÃO é próxima renda)", revision: true },
   { key: "20261013-rend", date: "2026-10-13", kind: "income", amount: "0.04", category: "Outros", description: "Rendimento bancário (extrato revisado de 13/10)", revision: true },
-  // bloco antes do salário (extrato 14/10 →)
+  // 14/10
   { key: "20261014-tqj", date: "2026-10-14", kind: "income", amount: "0.12", category: "Outros", description: "TQJ-PAR — crédito de casa de apostas (entrada extraordinária; NÃO recorrente, NÃO é salário)" },
-  { key: "20261014-rifa", date: "2026-10-14", kind: "expense", amount: "5.06", category: "Lazer", description: "RIVMONT PRI — rifa", inferred: true },
-  { key: "20261014-afiliado", date: "2026-10-14", kind: "income", amount: "130.20", category: "Trabalho", description: "Comissão de afiliado — venda de um curso (SISPAG PIX AUTORIZOU INTERMEDI): renda extra, NÃO recorrente por enquanto, não altera o salário-base", inferred: true },
-  { key: "20261014-posto-carro", date: "2026-10-14", kind: "expense", amount: "30.00", category: "Transporte", description: "Posto São Lourenço — gasolina do carro", inferred: true },
-  { key: "20261014-carrossel", date: "2026-10-14", kind: "expense", amount: "55.22", category: "Alimentação", description: "Carrossel — provavelmente alimentação/mercado (o usuário não lembra o item exato)", confidence: "ESTIMATED", inferred: true },
-  { key: "20261014-leila", date: "2026-10-14", kind: "expense", amount: "49.90", category: "Outros", description: "Leila Nogueira — ração da Catarina (pet / alimentação animal)", inferred: true },
-  { key: "20261014-posto-moto", date: "2026-10-14", kind: "expense", amount: "70.00", category: "Transporte", description: "Posto — gasolina da moto", inferred: true },
-  // bloco depois do salário
-  { key: "20261026-posto-carro", date: "2026-10-26", kind: "expense", amount: "30.00", category: "Transporte", description: "Posto — gasolina do carro", inferred: true },
-  { key: "20261026-pneu", date: "2026-10-26", kind: "expense", amount: "190.00", category: "Transporte", description: "Carlos Henrique — troca de pneu do carro (gasto real agora; o usuário pretende recuperar economicamente na venda do carro — sem Receivable)", inferred: true },
-  { key: "20261024-pedro-churrasco", date: "2026-10-24", posted: "2026-10-26", kind: "expense", amount: "40.00", category: "Lazer", description: "Pedro — churrasco (data econômica 24/10; lançado no banco em 26/10)" },
+  { key: "20261014-rifa", date: "2026-10-14", kind: "expense", amount: "5.06", category: "Lazer", description: "RIVMONT PRI — rifa" },
+  // 21/10
+  { key: "20261021-afiliado", date: "2026-10-21", kind: "income", amount: "130.20", category: "Trabalho", description: "Comissão de afiliado — venda de um curso (SISPAG PIX AUTORIZOU INTERMEDI): renda extra, NÃO recorrente por enquanto, não altera o salário-base" },
+  { key: "20261021-posto-carro", date: "2026-10-21", kind: "expense", amount: "30.00", category: "Transporte", description: "Posto São Lourenço — gasolina do carro" },
+  // 22/10
+  { key: "20261022-carrossel", date: "2026-10-22", kind: "expense", amount: "55.22", category: "Alimentação", description: "Carrossel — provavelmente alimentação/mercado (o usuário não lembra o item exato)", confidence: "ESTIMATED" },
+  { key: "20261022-leila", date: "2026-10-22", kind: "expense", amount: "49.90", category: "Outros", description: "Leila Nogueira — ração da Catarina (pet / alimentação animal)" },
+  { key: "20261022-posto-moto", date: "2026-10-22", kind: "expense", amount: "70.00", category: "Transporte", description: "Posto — gasolina da moto" },
+  // 23/10 (o crédito de 5.309,15 está em SALARY)
+  { key: "20261023-posto-carro", date: "2026-10-23", kind: "expense", amount: "30.00", category: "Transporte", description: "Posto — gasolina do carro" },
+  { key: "20261023-pneu", date: "2026-10-23", kind: "expense", amount: "190.00", category: "Transporte", description: "Carlos Henrique — troca de pneu do carro (gasto real agora; o usuário pretende recuperar economicamente na venda do carro — sem Receivable)" },
+  // 26/10
+  { key: "20261024-pedro-churrasco", date: "2026-10-24", posted: "2026-10-26", kind: "expense", amount: "40.00", category: "Lazer", description: "Pedro — churrasco (data econômica 24/10, referenciada na descrição bancária; lançado no banco em 26/10)" },
   { key: "20261026-tapete", date: "2026-10-26", kind: "expense", amount: "65.98", category: "Outros", description: "PIX Marketplace — tapete higiênico para a Catarina (pet)" },
 ];
+// Contagem: linhas do EXTRATO desde a âncora anterior = ITAU_ITEMS (14 menos o crédito do salário que é 1 linha) → ver BANK_STATEMENT_LINES_NEW abaixo.
 // Crédito bancário ÚNICO de 5.309,15 em 23/10 = salário-base (ocorrência recorrente de 24/10) + hora extra (extraordinária, NÃO recorrente).
 export const SALARY = { date: "2026-10-23", occurrence: "2026-10-24", base: "4937.18", overtime: "371.97", total: "5309.15" };
 export const CAJU_ITEMS = [
@@ -96,7 +100,7 @@ export const CARD_EXPENSES = [
   { key: "chatgpt", date: "2026-10-25", amount: "106.60", category: "Outros", description: "OpenAI ChatGPT — assinatura (US$ 20,00; internacional)", isRecurring: true },
   { key: "iof-chatgpt", date: "2026-10-25", amount: "3.73", category: "Outros", description: "IOF internacional — encargo da compra ChatGPT de 25/10 (não existe CardFee no domínio: lançado como encargo do cartão, não como compra independente)", isRecurring: false },
 ];
-export const TATTOO1 = { description: "Tattoo — parte 1", creditor: "Mãe", count: 10, value: "145.00", total: "1450.00" };
+export const TATTOO1 = { description: "Tattoo — parte 1", creditor: "Mãe", count: 10, value: "145.00", total: "1450.00", firstDueDate: "2026-10-27" }; // 1ª parcela paga AGORA (hoje de 27/10)
 
 // ----------------------------------------------------------------------------- planner
 export async function buildCatchup107Plan({ client } = {}) {
@@ -151,8 +155,8 @@ export async function buildCatchup107Plan({ client } = {}) {
     const signed = it.kind === "income" ? money(it.amount) : money(it.amount).neg();
     if (who === "itau" && !it.revision && counts(itauEffAnchorAt, day(it.date))) itauDelta = addMoney(itauDelta, signed);
     if (who === "caju" && counts(cajuAnchor?.occurredAt, day(it.date))) cajuDelta = addMoney(cajuDelta, signed);
-    const note = [it.inferred ? "data exata da linha não informada no relato — agrupada pela ordem do extrato" : null, it.posted ? `lançamento bancário em ${it.posted}` : null, it.revision ? "já refletido no saldo revisado do banco (13/10 = 15,21)" : null].filter(Boolean).join("; ");
-    op({ section: who, kind: it.kind === "income" ? "ADD_INCOME" : "ADD_EXPENSE", description: `${it.kind === "income" ? "+" : "−"}R$ ${it.amount} em ${it.date}${it.posted ? ` (banco ${it.posted})` : ""}${it.inferred ? " (data pela ordem do extrato)" : ""}: ${it.description}`, target: { model, accountId: account.id }, data: { amount: it.amount, occurredAt: it.date, description: it.description, category: it.category, source: "manual", confidence: it.confidence ?? "CONFIRMED", rawMessage: `${PLAN_TAG}:${it.key}${note ? ` | ${note}` : ""}`, isRecurring: false, ...extra }, effect: { [who]: `${it.kind === "income" ? "+" : "-"}${it.amount}` }, preconditions: { absent: { model, accountId: account.id, marker: `${PLAN_TAG}:${it.key}`, day: it.date, amount: it.amount } } });
+    const note = [it.posted ? `lançamento bancário em ${it.posted}` : null, it.revision ? "já refletido no saldo revisado do banco (13/10 = 15,21)" : null].filter(Boolean).join("; ");
+    op({ section: who, kind: it.kind === "income" ? "ADD_INCOME" : "ADD_EXPENSE", description: `${it.kind === "income" ? "+" : "−"}R$ ${it.amount} em ${it.date}${it.posted ? ` (banco ${it.posted})` : ""}: ${it.description}`, target: { model, accountId: account.id }, data: { amount: it.amount, occurredAt: it.date, description: it.description, category: it.category, source: "manual", confidence: it.confidence ?? "CONFIRMED", rawMessage: `${PLAN_TAG}:${it.key}${note ? ` | ${note}` : ""}`, isRecurring: false, ...extra }, effect: { [who]: `${it.kind === "income" ? "+" : "-"}${it.amount}` }, preconditions: { absent: { model, accountId: account.id, marker: `${PLAN_TAG}:${it.key}`, day: it.date, amount: it.amount } } });
   }
 
   // ---------- 1) Itaú: revisão do saldo de 13/10 (auditável: a âncora anterior de 12,28 é preservada) + linhas
@@ -231,7 +235,7 @@ export async function buildCatchup107Plan({ client } = {}) {
   const tattooPlan = await client.externalInstallmentPlan.findFirst({ where: { description: TATTOO1.description, creditor: TATTOO1.creditor } });
   const tattooTwo = await client.externalInstallmentPlan.findFirst({ where: { description: { contains: "Tattoo", mode: "insensitive" }, NOT: { description: TATTOO1.description } } });
   if (tattooTwo) blockers.push(`Já existe outro plano 'Tattoo' (${tattooTwo.description}) — a segunda tattoo NÃO foi realizada e não pode existir.`);
-  if (!tattooPlan) op({ section: "tattoo", kind: "ADD_EXTERNAL_INSTALLMENT_PLAN", description: "Plano 'Tattoo — parte 1' na mãe: R$ 1.450,00 em 10x de R$ 145,00 (cartão de crédito da mãe), ACTIVE, 0 parcelas pagas. Mesmo modelo dos demais planos da mãe: vencimento relativo à próxima renda (AFTER_NEXT_INCOME), SEM data de calendário inventada", target: { model: "externalInstallmentPlan" }, data: { description: TATTOO1.description, creditor: TATTOO1.creditor, installmentValue: TATTOO1.value, installmentCount: TATTOO1.count, dueTiming: "AFTER_NEXT_INCOME", confidence: "CONFIRMED", notes: `Primeira tattoo já realizada (valor total ${TATTOO1.total}), paga no cartão de crédito da mãe do usuário em 10x sem juros de ${TATTOO1.value}. Nenhuma parcela paga ainda; o Cofrinho (R$ 193) NÃO foi transferido para a mãe. A segunda tattoo (R$ 1.650 em 10x de R$ 165) NÃO foi realizada e NÃO existe no Norte. ${SOURCES_NOTE}` }, preconditions: { absentPlan: TATTOO1.description } });
+  if (!tattooPlan) op({ section: "tattoo", kind: "ADD_EXTERNAL_INSTALLMENT_PLAN", description: "Plano 'Tattoo — parte 1' na mãe: R$ 1.450,00 em 10x de R$ 145,00 (cartão de crédito da mãe), ACTIVE, 0 parcelas pagas. A 1ª parcela (R$ 145,00) é compromisso do CICLO ATUAL: o usuário a paga AGORA com o salário já recebido ⇒ vencimento = 27/10 (CALENDAR_DATE, ≤ próxima renda) e reduz o dinheiro livre de hoje; as parcelas 2–10 seguem nos ciclos seguintes (mensal a partir da 1ª, derivado)", target: { model: "externalInstallmentPlan" }, data: { description: TATTOO1.description, creditor: TATTOO1.creditor, installmentValue: TATTOO1.value, installmentCount: TATTOO1.count, dueTiming: "CALENDAR_DATE", firstDueDate: TATTOO1.firstDueDate, confidence: "CONFIRMED", notes: `Primeira tattoo já realizada (valor total ${TATTOO1.total}), paga no cartão de crédito da mãe do usuário em 10x sem juros de ${TATTOO1.value}. A 1ª parcela será paga AGORA, com o salário deste ciclo: firstDueDate = ${TATTOO1.firstDueDate} é a data em que o usuário declarou o pagamento (NÃO é um vencimento contratual informado); as parcelas 2–10 têm vencimento DERIVADO mensalmente a partir dela. Nenhuma parcela paga ainda; o Cofrinho (R$ 193) NÃO foi transferido para a mãe. A segunda tattoo (R$ 1.650 em 10x de R$ 165) NÃO foi realizada e NÃO existe no Norte. ${SOURCES_NOTE}` }, preconditions: { absentPlan: TATTOO1.description } });
   else if (tattooPlan.status !== "ACTIVE" || !same(tattooPlan.installmentValue, TATTOO1.value) || tattooPlan.installmentCount !== TATTOO1.count) blockers.push("Plano 'Tattoo — parte 1' existe mas difere do informado.");
 
   // ---------- 5) Cofrinho / Tattoo reserve: +43 sem origem conhecida ⇒ reconciliação (nunca Income inventada)
@@ -293,10 +297,11 @@ export async function buildCatchup107Plan({ client } = {}) {
     operations,
     balancesBefore,
     balancesProjected,
+    bank: { statementLinesNewSinceLastAnchor: 14, itauEconomicRecordsCreated: ITAU_ITEMS.length + 2, cajuStatementLines: CAJU_ITEMS.length + 1, cajuEconomicRecordsCreated: CAJU_ITEMS.length + 1, note: "14 linhas bancárias do Itaú desde 12,28: 13/10 (2) + 14/10 (2) + 21/10 (2) + 22/10 (3) + 23/10 (3: crédito 5.309,15 + posto + pneu) + 26/10 (2). O crédito 5.309,15 é UMA linha bancária decomposta em 2 registros econômicos (base + hora extra): 14 linhas → 15 registros, mesmo total." },
     itau: { revision: { from: fmt(itauAnchor.newBalance), to: TARGETS.itauRevision13, done: itauRevDone }, newMovements: ITAU_ITEMS.filter((i) => !i.revision).length, residual: fmt(itauAdj) },
     card: { novObservedTarget: TARGETS.novObserved, previousObserved: TARGETS.novPrevObserved, delta: TARGETS.novDelta, calculatedAfterPlan: fmt(calcAtObs), knownGap: fmt(subtractMoney(TARGETS.novObserved, calcAtObs)), futureDec, futureJan, futureFeb, reiDoPernilIncludedInObserved: true },
     income: { salaryBankCredit: SALARY.total, baseSalary: SALARY.base, overtime: SALARY.overtime, affiliate: "130.20", gamblingCredits: "3.08" },
-    tattoo: { reserveBefore: balancesBefore.cofrinho, reserveTarget: TARGETS.cofrinho, goalBefore: goal ? goal.savedAmount.toString() : null, plan1: `${TATTOO1.total} / ${TATTOO1.count} x ${TATTOO1.value}`, tattoo2Created: false, casacoReceivableCreated: false, future438PaymentCreated: false },
+    tattoo: { reserveBefore: balancesBefore.cofrinho, reserveTarget: TARGETS.cofrinho, goalBefore: goal ? goal.savedAmount.toString() : null, plan1: `${TATTOO1.total} / ${TATTOO1.count} x ${TATTOO1.value}`, firstInstallmentDue: TATTOO1.firstDueDate, firstInstallmentCommittedNow: true, tattoo2Created: false, casacoReceivableCreated: false, future438PaymentCreated: false },
     preserved: { cajuReimbursementsPending: fmt(reimbPending.reduce((a, r) => addMoney(a, r.amount), money(0))), tinyReceivable: tiny ? tiny.amount.toString() : null, cnpjPayable: cnpj ? `${cnpj.amount} ${cnpj.status}` : null, tiger: tiger ? `${tiger.amount} ${tiger.status}` : null },
     checkpoints,
     sources: SOURCES_NOTE,

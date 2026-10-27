@@ -144,9 +144,15 @@ async function runPlan(tx, plan) {
         const d = op.data;
         if (await tx.externalInstallmentPlan.findFirst({ where: { description: d.description, creditor: d.creditor } })) fail(op, "plano Tattoo — parte 1 já existe");
         if (await tx.externalInstallmentPlan.findFirst({ where: { description: { contains: "Tattoo", mode: "insensitive" } } })) fail(op, "já existe um plano 'Tattoo' — a segunda tattoo não pode existir");
-        if (d.dueTiming !== "AFTER_NEXT_INCOME") fail(op, "Tattoo 1 não pode ter data de calendário inventada");
-        const plan1 = await tx.externalInstallmentPlan.create({ data: { description: d.description, creditor: d.creditor, installmentValue: d.installmentValue, installmentCount: d.installmentCount, firstDueDate: null, dueTiming: d.dueTiming, status: "ACTIVE", confidence: d.confidence, notes: d.notes } });
-        await tx.externalInstallment.createMany({ data: Array.from({ length: d.installmentCount }, (_, i) => ({ planId: plan1.id, number: i + 1, amount: d.installmentValue, dueDate: null })) });
+        if (d.dueTiming !== "CALENDAR_DATE" || d.firstDueDate !== "2026-10-27") fail(op, "Tattoo 1: a 1ª parcela deve ser compromisso do ciclo atual (CALENDAR_DATE, 27/10)");
+        const first = day(d.firstDueDate);
+        const addMonthsUtc = (base, n) => {
+          const y = base.getUTCFullYear() + Math.floor((base.getUTCMonth() + n) / 12);
+          const m = (base.getUTCMonth() + n) % 12;
+          return new Date(Date.UTC(y, m, base.getUTCDate()));
+        };
+        const plan1 = await tx.externalInstallmentPlan.create({ data: { description: d.description, creditor: d.creditor, installmentValue: d.installmentValue, installmentCount: d.installmentCount, firstDueDate: first, dueTiming: "CALENDAR_DATE", status: "ACTIVE", confidence: d.confidence, notes: d.notes } });
+        await tx.externalInstallment.createMany({ data: Array.from({ length: d.installmentCount }, (_, i) => ({ planId: plan1.id, number: i + 1, amount: d.installmentValue, dueDate: addMonthsUtc(first, i) })) });
         bump("created", "externalInstallmentPlan");
         bump("created", "externalInstallment", d.installmentCount);
         break;
