@@ -145,6 +145,7 @@ async function runPlan(tx, plan) {
         if (await tx.externalInstallmentPlan.findFirst({ where: { description: d.description, creditor: d.creditor } })) fail(op, "plano Tattoo — parte 1 já existe");
         if (await tx.externalInstallmentPlan.findFirst({ where: { description: { contains: "Tattoo", mode: "insensitive" } } })) fail(op, "já existe um plano 'Tattoo' — a segunda tattoo não pode existir");
         if (d.dueTiming !== "CALENDAR_DATE" || d.firstDueDate !== "2026-10-27") fail(op, "Tattoo 1: a 1ª parcela deve ser compromisso do ciclo atual (CALENDAR_DATE, 27/10)");
+        if (d.confidence !== "ESTIMATED" || !/não é vencimento contratual informado pelo usuário/.test(d.notes)) fail(op, "Tattoo 1: o calendário das parcelas 2–10 deve ser ESTIMADO e a nota deve dizer que não é vencimento contratual");
         const first = day(d.firstDueDate);
         const addMonthsUtc = (base, n) => {
           const y = base.getUTCFullYear() + Math.floor((base.getUTCMonth() + n) / 12);
